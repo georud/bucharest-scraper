@@ -94,15 +94,11 @@ class Orchestrator:
     async def _scrape_platform_booking(
         self, cells: list[GridCell], cell_map: dict[str, GridCell], run_id: int
     ):
-        """Scrape all cells for Booking.com.
-
-        The BookingScraper fetches all city-wide results on the first
-        scrape_cell() call, then filters by bounding box for each cell.
-        No inter-cell delay is needed after the initial fetch.
-        """
+        """Scrape all cells for Booking.com with per-cell bounding-box queries."""
         scraper = BookingScraper(self.config, self.proxy)
 
         async with scraper:
+            delay = AdaptiveDelay(self.config.scraping)
             pending = self.db.get_pending_cells(Platform.BOOKING)
             cells_to_scrape = [cell_map[cid] for cid in pending if cid in cell_map]
 
@@ -112,6 +108,7 @@ class Orchestrator:
 
                 try:
                     listings = await scraper.scrape_cell(cell)
+                    raw_count = len(listings)
                     listings = self.dedup.deduplicate(listings)
 
                     if listings:
@@ -119,6 +116,17 @@ class Orchestrator:
 
                     result_count = len(listings)
                     status = ScrapeStatus.COMPLETED
+
+                    if should_refine(
+                        raw_count,
+                        self.config.city.booking_results_cap,
+                        self.config.city.refine_threshold,
+                    ):
+                        status = ScrapeStatus.NEEDS_REFINEMENT
+                        logger.info(
+                            "Cell %s hit cap: %d raw, %d after dedup — marking for refinement",
+                            cell.cell_id, raw_count, result_count,
+                        )
 
                     self.db.update_cell_status(cell.cell_id, Platform.BOOKING, status, result_count)
 
@@ -130,6 +138,10 @@ class Orchestrator:
                     self.db.update_cell_status(
                         cell.cell_id, Platform.BOOKING, ScrapeStatus.FAILED, error_message=str(e)
                     )
+
+                await delay.wait("booking")
+
+            await self._refine_cells(scraper, Platform.BOOKING, cell_map)
 
     async def _scrape_platform_airbnb(
         self, cells: list[GridCell], cell_map: dict[str, GridCell], run_id: int
@@ -148,6 +160,7 @@ class Orchestrator:
 
                 try:
                     listings = await scraper.scrape_cell(cell)
+                    raw_count = len(listings)
                     listings = self.dedup.deduplicate(listings)
 
                     if listings:
@@ -157,11 +170,15 @@ class Orchestrator:
                     status = ScrapeStatus.COMPLETED
 
                     if should_refine(
-                        result_count,
+                        raw_count,
                         self.config.city.airbnb_results_cap,
                         self.config.city.refine_threshold,
                     ):
                         status = ScrapeStatus.NEEDS_REFINEMENT
+                        logger.info(
+                            "Cell %s hit cap: %d raw, %d after dedup — marking for refinement",
+                            cell.cell_id, raw_count, result_count,
+                        )
 
                     self.db.update_cell_status(cell.cell_id, Platform.AIRBNB, status, result_count)
 
@@ -179,38 +196,77 @@ class Orchestrator:
             await self._refine_cells(scraper, Platform.AIRBNB, cell_map)
 
     async def _refine_cells(self, scraper, platform: Platform, cell_map: dict[str, GridCell]):
-        """Subdivide and re-scrape cells that hit the result cap."""
-        cells_to_refine = self.db.get_cells_needing_refinement(platform)
+        """Recursively subdivide and re-scrape cells that hit the result cap.
 
-        if not cells_to_refine:
+        Uses BFS queue so all res-N cells are processed before res-(N+1).
+        """
+        initial_ids = self.db.get_cells_needing_refinement(platform)
+        if not initial_ids:
             return
 
-        logger.info("Refining %d dense %s cells...", len(cells_to_refine), platform.value)
+        cap = (
+            self.config.city.booking_results_cap
+            if platform == Platform.BOOKING
+            else self.config.city.airbnb_results_cap
+        )
+        max_res = self.config.city.max_refine_resolution
+
+        # Build initial queue from cells needing refinement
+        from collections import deque
+        queue: deque[GridCell] = deque()
+        for cell_id in initial_ids:
+            if cell_id in cell_map:
+                queue.append(cell_map[cell_id])
+
+        logger.info(
+            "Refining %d dense %s cells (max resolution %d)...",
+            len(queue), platform.value, max_res,
+        )
         delay = AdaptiveDelay(self.config.scraping)
 
-        for cell_id in cells_to_refine:
-            if cell_id not in cell_map:
+        while queue:
+            parent_cell = queue.popleft()
+            next_res = parent_cell.resolution + 1
+
+            if next_res > max_res:
+                logger.warning(
+                    "Cell %s at res %d hit cap but max_refine_resolution (%d) reached — skipping",
+                    parent_cell.cell_id, parent_cell.resolution, max_res,
+                )
+                self.db.update_cell_status(parent_cell.cell_id, platform, ScrapeStatus.COMPLETED)
                 continue
 
-            parent_cell = cell_map[cell_id]
-            sub_cells = refine_cell(parent_cell, self.config.city)
+            sub_cells = refine_cell(parent_cell, next_res)
 
             for sub_cell in sub_cells:
                 try:
                     listings = await scraper.scrape_cell(sub_cell)
+                    raw_count = len(listings)
                     listings = self.dedup.deduplicate(listings)
                     if listings:
                         self.db.upsert_listings(listings)
+
                     logger.info(
-                        "Refined sub-cell %s: %d listings", sub_cell.cell_id, len(listings)
+                        "Refined sub-cell %s (res %d): %d raw, %d after dedup",
+                        sub_cell.cell_id, sub_cell.resolution, raw_count, len(listings),
                     )
+
+                    # If sub-cell also hits cap, add to queue for further refinement
+                    if should_refine(raw_count, cap, self.config.city.refine_threshold):
+                        cell_map[sub_cell.cell_id] = sub_cell
+                        queue.append(sub_cell)
+                        logger.info(
+                            "Sub-cell %s also hit cap (%d) — queued for refinement to res %d",
+                            sub_cell.cell_id, raw_count, sub_cell.resolution + 1,
+                        )
+
                 except Exception as e:
                     logger.error("Failed to scrape refined cell %s: %s", sub_cell.cell_id, e)
 
                 await delay.wait(platform.value)
 
-            # Mark parent as completed after refinement
-            self.db.update_cell_status(cell_id, platform, ScrapeStatus.COMPLETED)
+            # Mark parent as completed after all sub-cells done
+            self.db.update_cell_status(parent_cell.cell_id, platform, ScrapeStatus.COMPLETED)
 
 
 def main():

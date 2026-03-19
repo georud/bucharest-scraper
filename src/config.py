@@ -27,6 +27,7 @@ class CityConfig:
     bounds: Bounds
     h3_resolution: int
     refine_resolution: int
+    max_refine_resolution: int
     refine_threshold: float
     booking_country_code: str
     booking_dest_id: str
@@ -89,6 +90,7 @@ def load_config() -> AppConfig:
         bounds=bounds,
         h3_resolution=grid["h3_resolution"],
         refine_resolution=grid["refine_resolution"],
+        max_refine_resolution=grid.get("max_refine_resolution", grid["refine_resolution"]),
         refine_threshold=grid["refine_threshold"],
         booking_country_code=booking["country_code"],
         booking_dest_id=booking["dest_id"],

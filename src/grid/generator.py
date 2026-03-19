@@ -46,15 +46,15 @@ def generate_grid(config: CityConfig) -> list[GridCell]:
     return cells
 
 
-def refine_cell(cell: GridCell, config: CityConfig) -> list[GridCell]:
+def refine_cell(cell: GridCell, target_resolution: int) -> list[GridCell]:
     """Subdivide a cell into higher-resolution children for dense areas."""
-    children = h3.cell_to_children(cell.cell_id, config.refine_resolution)
-    refined = [_make_grid_cell(cid, config.refine_resolution) for cid in children]
+    children = h3.cell_to_children(cell.cell_id, target_resolution)
+    refined = [_make_grid_cell(cid, target_resolution) for cid in children]
     logger.info(
         "Refined cell %s into %d sub-cells at resolution %d",
         cell.cell_id,
         len(refined),
-        config.refine_resolution,
+        target_resolution,
     )
     return refined
 

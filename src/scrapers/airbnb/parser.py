@@ -12,6 +12,143 @@ from ...text import normalize_text
 logger = logging.getLogger(__name__)
 
 
+def _get_nested(d: dict, path: str, default=None):
+    """Navigate a nested dict via dotted path, e.g. 'a.b.c'."""
+    current = d
+    for key in path.split("."):
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+        if current is None:
+            return default
+    return current
+
+
+def parse_raw_api_results(raw_json: dict, grid_cell_id: str = "") -> list[Listing]:
+    """Parse raw Airbnb StaysSearch API JSON directly, bypassing pyairbnb's standardize.
+
+    This avoids the `case _: continue` bug in pyairbnb's from_search() that silently
+    drops listings whose secondary price string has 4+ words.
+    """
+    listings = []
+
+    results = _get_nested(raw_json, "data.presentation.staysSearch.results.searchResults")
+    if not results:
+        return listings
+
+    for result in results:
+        try:
+            if _get_nested(result, "__typename") != "StaySearchResult":
+                continue
+
+            listing = _parse_raw_result(result, grid_cell_id)
+            if listing:
+                listings.append(listing)
+        except Exception as e:
+            logger.debug("Failed to parse raw Airbnb result: %s", e)
+
+    return listings
+
+
+def extract_pagination_cursor(raw_json: dict) -> str | None:
+    """Extract the next page cursor from raw StaysSearch response."""
+    return _get_nested(raw_json, "data.presentation.staysSearch.results.paginationInfo.nextPageCursor")
+
+
+def _parse_raw_result(result: dict, grid_cell_id: str) -> Listing | None:
+    """Parse a single raw StaySearchResult into a Listing."""
+    from pyairbnb.standardize import decode_listing_id
+
+    # Room ID via base64 decode
+    raw_id = _get_nested(result, "demandStayListing.id", "")
+    prop_id = str(decode_listing_id(raw_id))
+    if not prop_id or prop_id == "0":
+        return None
+
+    # Coordinates
+    lat = _get_nested(result, "demandStayListing.location.coordinate.latitude", 0.0)
+    lng = _get_nested(result, "demandStayListing.location.coordinate.longitude", 0.0)
+    if lat == 0.0 and lng == 0.0:
+        return None
+
+    # Name
+    name = normalize_text(
+        _get_nested(result, "demandStayListing.description.name.localizedStringWithTranslationPreference", "")
+    )
+
+    # Rating — "4.85 (120)" format, graceful split
+    review_score = None
+    review_count = None
+    avg_rating_str = _get_nested(result, "avgRatingLocalized", "")
+    if avg_rating_str:
+        parts = avg_rating_str.split(" ", 1)
+        try:
+            review_score = float(parts[0].replace(",", "."))
+        except (ValueError, IndexError):
+            pass
+        if len(parts) > 1:
+            m = re.search(r"\d+", parts[1])
+            if m:
+                review_count = int(m.group())
+
+    # Price — primary line only, no secondary price dependency
+    price = None
+    currency = "EUR"
+    pr = _get_nested(result, "structuredDisplayPrice", {})
+    price_str = _get_nested(pr, "primaryLine.originalPrice", "")
+    if not price_str:
+        price_str = _get_nested(pr, "primaryLine.price", "")
+    if price_str:
+        digits = re.findall(r"\d+", price_str.replace(",", ""))
+        if digits:
+            price = float("".join(digits))
+
+    # Room info from structuredContent.mapPrimaryLine
+    room_info = {"bedrooms": None, "beds": None, "bathrooms": None, "max_guests": None}
+    sc = _get_nested(result, "structuredContent", {})
+    if isinstance(sc, dict):
+        primary_line = sc.get("mapPrimaryLine", [])
+        if isinstance(primary_line, list):
+            texts = [
+                e.get("body", "") if isinstance(e, dict) else str(e)
+                for e in primary_line
+            ]
+            room_info = _parse_room_text(texts)
+
+    # Photo
+    context_photos = _get_nested(result, "contextualPictures", [])
+    photo_url = None
+    if context_photos and isinstance(context_photos, list):
+        photo_url = _get_nested(context_photos[0], "picture")
+
+    listing_id = Listing.make_id(Platform.AIRBNB, prop_id)
+
+    return Listing(
+        id=listing_id,
+        platform=Platform.AIRBNB,
+        platform_id=prop_id,
+        name=name,
+        latitude=float(lat),
+        longitude=float(lng),
+        property_type=None,
+        star_rating=None,
+        review_score=review_score,
+        review_count=review_count,
+        price_per_night=price,
+        currency=currency,
+        url=f"https://www.airbnb.com/rooms/{prop_id}",
+        thumbnail_url=photo_url,
+        bedrooms=room_info["bedrooms"],
+        beds=room_info["beds"],
+        bathrooms=room_info["bathrooms"],
+        max_guests=room_info["max_guests"],
+        is_superhost=None,
+        scraped_at=datetime.utcnow(),
+        grid_cell_id=grid_cell_id,
+        raw_json=json.dumps(result, default=str),
+    )
+
+
 def parse_airbnb_results(data: dict, grid_cell_id: str = "") -> list[Listing]:
     """Parse Airbnb StaysSearch API response into Listing objects."""
     listings = []

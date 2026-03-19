@@ -11,6 +11,7 @@ grid:
   h3_resolution: 7          # ~100 cells, ~5 km² each
   refine_resolution: 8       # For dense areas, ~7 sub-cells
   refine_threshold: 0.9      # Refine if results exceed 90% of platform cap
+  max_refine_resolution: 10  # Maximum H3 resolution for recursive refinement
 
 booking:
   country_code: "ro"
@@ -20,10 +21,10 @@ booking:
   checkout_offset_days: 15   # Days from now for check-out
   adults: 1
   rooms: 1
-  results_cap: 1000
+  results_cap: 250
   use_dates: false    # false = undated search (more listings), true = filter by dates
 
 airbnb:
-  results_cap: 300
+  results_cap: 280
   adults: 1
   use_dates: false    # false = undated search (more listings), true = filter by dates

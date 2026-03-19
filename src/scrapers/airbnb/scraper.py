@@ -11,7 +11,7 @@ from ...anti_detect.proxy import ProxyManager
 from ...grid.generator import GridCell
 from ...models.listing import Listing
 from ..base import BaseScraper
-from .parser import parse_pyairbnb_results
+from .parser import parse_pyairbnb_results, parse_raw_api_results, extract_pagination_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,12 @@ class AirbnbScraper(BaseScraper):
         self.delay = AdaptiveDelay(config.scraping)
         self.proxy = proxy_manager or ProxyManager(config.proxy_urls)
         self._pyairbnb = None
+        self._api_key: str | None = None
+        self._search_hash: str | None = None
 
     async def init_session(self) -> None:
         """Initialize pyairbnb and prepare for scraping."""
+        import asyncio
         from ..booking.graphql import get_dates
 
         RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -56,6 +59,23 @@ class AirbnbScraper(BaseScraper):
             import pyairbnb
             self._pyairbnb = pyairbnb
             logger.info("Airbnb scraper initialized with pyairbnb")
+
+            # Cache API key and search hash at session level
+            proxy = self.proxy.get_proxy()
+            loop = asyncio.get_running_loop()
+            self._api_key = await loop.run_in_executor(
+                None, pyairbnb.api.get, proxy or ""
+            )
+            logger.info("Cached Airbnb API key")
+
+            try:
+                self._search_hash = await loop.run_in_executor(
+                    None, pyairbnb.search.fetch_stays_search_hash, proxy or ""
+                )
+                logger.info("Cached fresh StaysSearch hash")
+            except Exception as e:
+                logger.warning("Could not fetch StaysSearch hash, using default: %s", e)
+                self._search_hash = ""
         except ImportError:
             logger.warning("pyairbnb not installed, will use Playwright fallback only")
 
@@ -84,13 +104,78 @@ class AirbnbScraper(BaseScraper):
             return []
 
     async def _scrape_via_pyairbnb(self, cell: GridCell) -> list[Listing]:
-        """Use pyairbnb library to search by bounding box."""
+        """Use pyairbnb raw API with our own parser to avoid from_search() price bug."""
+        import asyncio
+
+        bbox = cell.bbox
+        proxy = self.proxy.get_proxy()
+        zoom = _zoom_from_bbox(bbox)
+        checkin = self._checkin.isoformat() if self._checkin else ""
+        checkout = self._checkout.isoformat() if self._checkout else ""
+
+        api_key = self._api_key
+        search_hash = self._search_hash or ""
+
+        if not api_key:
+            # Fallback: re-fetch key
+            loop = asyncio.get_running_loop()
+            api_key = await loop.run_in_executor(
+                None, self._pyairbnb.api.get, proxy or ""
+            )
+            self._api_key = api_key
+
+        all_listings: list[Listing] = []
+        cursor = ""
+        page = 0
+        first_raw = None
+
+        try:
+            while True:
+                loop = asyncio.get_running_loop()
+                raw_json = await loop.run_in_executor(
+                    None,
+                    lambda c=cursor: self._pyairbnb.search.get(
+                        api_key, c, checkin, checkout,
+                        bbox["ne_lat"], bbox["ne_lng"], bbox["sw_lat"], bbox["sw_lng"],
+                        zoom, "EUR", "", 0, 100000,
+                        [], False, 0, 0, 0, 0, 0, 0,
+                        "en", proxy or "", search_hash,
+                    ),
+                )
+
+                if page == 0:
+                    first_raw = raw_json
+
+                listings = parse_raw_api_results(raw_json, cell.cell_id)
+                all_listings.extend(listings)
+                page += 1
+
+                next_cursor = extract_pagination_cursor(raw_json)
+                if not next_cursor or not listings:
+                    break
+                cursor = next_cursor
+
+        except Exception as e:
+            logger.warning(
+                "Raw API parsing failed for cell %s (page %d): %s — falling back to search_all",
+                cell.cell_id, page, e,
+            )
+            return await self._scrape_via_pyairbnb_fallback(cell)
+
+        # Save first page raw for debugging
+        if first_raw:
+            self._save_raw(cell.cell_id, first_raw)
+
+        logger.info("Cell %s: %d Airbnb listings via raw API (%d pages)", cell.cell_id, len(all_listings), page)
+        return all_listings
+
+    async def _scrape_via_pyairbnb_fallback(self, cell: GridCell) -> list[Listing]:
+        """Fallback: use pyairbnb.search_all() with standardize.from_search()."""
         import asyncio
 
         bbox = cell.bbox
         proxy = self.proxy.get_proxy()
 
-        # pyairbnb is sync, run in executor
         def _search():
             return self._pyairbnb.search_all(
                 check_in=self._checkin.isoformat() if self._checkin else "",
@@ -111,11 +196,10 @@ class AirbnbScraper(BaseScraper):
         if not results:
             return []
 
-        # Save raw data
-        self._save_raw(cell.cell_id, results)
+        self._save_raw(cell.cell_id + "_fallback", results)
 
         listings = parse_pyairbnb_results(results, cell.cell_id)
-        logger.info("Cell %s: %d Airbnb listings via pyairbnb", cell.cell_id, len(listings))
+        logger.info("Cell %s: %d Airbnb listings via pyairbnb fallback", cell.cell_id, len(listings))
         return listings
 
     async def _scrape_via_playwright(self, cell: GridCell) -> list[Listing]:
