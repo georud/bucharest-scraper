@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 from ...config import AppConfig, DATA_DIR
@@ -15,6 +16,15 @@ from .parser import parse_pyairbnb_results
 logger = logging.getLogger(__name__)
 
 RAW_DIR = DATA_DIR / "raw" / "airbnb"
+
+
+def _zoom_from_bbox(bbox: dict) -> int:
+    """Compute a Google Maps-style zoom level from a bounding box."""
+    lng_span = abs(bbox["ne_lng"] - bbox["sw_lng"])
+    if lng_span <= 0:
+        return 15
+    zoom = math.log2(360.0 / lng_span)
+    return max(1, min(20, round(zoom)))
 
 
 class AirbnbScraper(BaseScraper):
@@ -32,10 +42,15 @@ class AirbnbScraper(BaseScraper):
 
         RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-        self._checkin, self._checkout = get_dates(
-            self.config.city.checkin_offset_days,
-            self.config.city.checkout_offset_days,
-        )
+        if self.config.city.airbnb_use_dates:
+            self._checkin, self._checkout = get_dates(
+                self.config.city.checkin_offset_days,
+                self.config.city.checkout_offset_days,
+            )
+        else:
+            self._checkin = None
+            self._checkout = None
+            logger.info("Airbnb scraper using undated search for maximum listing coverage")
 
         try:
             import pyairbnb
@@ -52,14 +67,13 @@ class AirbnbScraper(BaseScraper):
         if self._pyairbnb:
             try:
                 listings = await self._scrape_via_pyairbnb(cell)
-                if listings:
-                    self.delay.on_success()
-                    return listings
+                self.delay.on_success()
+                return listings  # return even if empty — empty means no listings in cell
             except Exception as e:
                 logger.warning("pyairbnb failed for cell %s: %s", cell.cell_id, e)
                 self.delay.on_error()
 
-        # Fallback to Playwright
+        # Fallback to Playwright (only when pyairbnb is unavailable or errored)
         try:
             listings = await self._scrape_via_playwright(cell)
             self.delay.on_success()
@@ -79,13 +93,13 @@ class AirbnbScraper(BaseScraper):
         # pyairbnb is sync, run in executor
         def _search():
             return self._pyairbnb.search_all(
-                check_in=self._checkin.isoformat(),
-                check_out=self._checkout.isoformat(),
+                check_in=self._checkin.isoformat() if self._checkin else "",
+                check_out=self._checkout.isoformat() if self._checkout else "",
                 ne_lat=bbox["ne_lat"],
                 ne_long=bbox["ne_lng"],
                 sw_lat=bbox["sw_lat"],
                 sw_long=bbox["sw_lng"],
-                zoom_value=2,
+                zoom_value=_zoom_from_bbox(bbox),
                 price_min=0,
                 price_max=100000,
                 currency="EUR",
@@ -121,7 +135,7 @@ class AirbnbScraper(BaseScraper):
             page = await context.new_page()
 
             async def handle_response(response):
-                if "StaysSearch" in response.url or "/api/v3/" in response.url:
+                if "StaysSearch" in response.url:
                     try:
                         data = await response.json()
                         captured_data.append(data)
@@ -134,8 +148,10 @@ class AirbnbScraper(BaseScraper):
                 f"https://www.airbnb.com/s/Bucharest--Romania/homes"
                 f"?ne_lat={bbox['ne_lat']}&ne_lng={bbox['ne_lng']}"
                 f"&sw_lat={bbox['sw_lat']}&sw_lng={bbox['sw_lng']}"
-                f"&zoom_level=15&search_by_map=true"
+                f"&zoom_level={_zoom_from_bbox(bbox)}&search_by_map=true"
             )
+            if self._checkin and self._checkout:
+                url += f"&checkin={self._checkin.isoformat()}&checkout={self._checkout.isoformat()}"
 
             try:
                 await page.goto(url, wait_until="networkidle", timeout=30000)

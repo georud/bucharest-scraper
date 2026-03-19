@@ -61,37 +61,37 @@ def build_map_markers_query(
     ne_lng: float,
     sw_lat: float,
     sw_lng: float,
-    checkin: date,
-    checkout: date,
     dest_id: str,
     dest_type: str,
     adults: int,
     rooms: int,
+    checkin: date | None = None,
+    checkout: date | None = None,
 ) -> dict:
     """Build the GraphQL request body for MapMarkersDesktop."""
+    input_vars: dict = {
+        "boundingBox": {
+            "neLatitude": ne_lat,
+            "neLongitude": ne_lng,
+            "swLatitude": sw_lat,
+            "swLongitude": sw_lng,
+        },
+        "destination": {
+            "id": dest_id,
+            "type": dest_type,
+        },
+        "nbAdults": adults,
+        "nbChildren": 0,
+        "nbRooms": rooms,
+    }
+    if checkin and checkout:
+        input_vars["dates"] = {
+            "checkin": checkin.isoformat(),
+            "checkout": checkout.isoformat(),
+        }
     return {
         "operationName": "MapMarkersDesktop",
-        "variables": {
-            "input": {
-                "boundingBox": {
-                    "neLatitude": ne_lat,
-                    "neLongitude": ne_lng,
-                    "swLatitude": sw_lat,
-                    "swLongitude": sw_lng,
-                },
-                "dates": {
-                    "checkin": checkin.isoformat(),
-                    "checkout": checkout.isoformat(),
-                },
-                "destination": {
-                    "id": dest_id,
-                    "type": dest_type,
-                },
-                "nbAdults": adults,
-                "nbChildren": 0,
-                "nbRooms": rooms,
-            },
-        },
+        "variables": {"input": input_vars},
         "query": MAP_MARKERS_QUERY,
     }
 

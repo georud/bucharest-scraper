@@ -19,7 +19,7 @@ def parse_airbnb_results(data: dict, grid_cell_id: str = "") -> list[Listing]:
     try:
         results = data["data"]["presentation"]["staysSearch"]["mapResults"]["mapSearchResults"]
     except (KeyError, TypeError):
-        logger.warning("Unexpected Airbnb response structure")
+        logger.debug("Skipping non-search Airbnb response (missing mapSearchResults)")
         return listings
 
     for item in results:

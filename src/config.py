@@ -36,8 +36,10 @@ class CityConfig:
     adults: int
     rooms: int
     booking_results_cap: int
+    booking_use_dates: bool
     airbnb_results_cap: int
     airbnb_adults: int
+    airbnb_use_dates: bool
 
 
 @dataclass
@@ -96,8 +98,10 @@ def load_config() -> AppConfig:
         adults=booking["adults"],
         rooms=booking["rooms"],
         booking_results_cap=booking["results_cap"],
+        booking_use_dates=booking.get("use_dates", False),
         airbnb_results_cap=airbnb["results_cap"],
         airbnb_adults=airbnb["adults"],
+        airbnb_use_dates=airbnb.get("use_dates", False),
     )
 
     delays = scraping_raw["delays"]

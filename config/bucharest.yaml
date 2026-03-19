@@ -21,7 +21,9 @@ booking:
   adults: 1
   rooms: 1
   results_cap: 1000
+  use_dates: false    # false = undated search (more listings), true = filter by dates
 
 airbnb:
   results_cap: 300
   adults: 1
+  use_dates: false    # false = undated search (more listings), true = filter by dates

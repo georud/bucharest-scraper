@@ -89,10 +89,14 @@ class BookingScraper(BaseScraper):
 
     async def init_session(self) -> None:
         """Prepare HTTP client."""
-        self._checkin, self._checkout = get_dates(
-            self.config.city.checkin_offset_days,
-            self.config.city.checkout_offset_days,
-        )
+        if self.config.city.booking_use_dates:
+            self._checkin, self._checkout = get_dates(
+                self.config.city.checkin_offset_days,
+                self.config.city.checkout_offset_days,
+            )
+        else:
+            self._checkin = None
+            self._checkout = None
 
         self._http = Session(
             impersonate=self.config.scraping.curl_impersonate,
@@ -126,27 +130,27 @@ class BookingScraper(BaseScraper):
 
     def _build_variables(self, offset: int = 0) -> dict:
         city = self.config.city
-        return {
-            "input": {
-                "dates": {
-                    "checkin": self._checkin.isoformat(),
-                    "checkout": self._checkout.isoformat(),
-                },
-                "location": {
-                    "searchString": city.city,
-                    "destId": 0,
-                    "destType": "NO_DEST_TYPE",
-                },
-                "nbAdults": city.adults,
-                "nbRooms": city.rooms,
-                "nbChildren": 0,
-                "pagination": {
-                    "rowsPerPage": RESULTS_PER_PAGE,
-                    "offset": offset,
-                },
-                "filters": {},
+        input_vars: dict = {
+            "location": {
+                "searchString": city.city,
+                "destId": 0,
+                "destType": "NO_DEST_TYPE",
             },
+            "nbAdults": city.adults,
+            "nbRooms": city.rooms,
+            "nbChildren": 0,
+            "pagination": {
+                "rowsPerPage": RESULTS_PER_PAGE,
+                "offset": offset,
+            },
+            "filters": {},
         }
+        if self._checkin and self._checkout:
+            input_vars["dates"] = {
+                "checkin": self._checkin.isoformat(),
+                "checkout": self._checkout.isoformat(),
+            }
+        return {"input": input_vars}
 
     def _headers(self) -> dict:
         return {
