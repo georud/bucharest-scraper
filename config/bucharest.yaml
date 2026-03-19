@@ -1,0 +1,27 @@
+city: Bucharest
+country: Romania
+
+bounds:
+  north: 44.58
+  south: 44.33
+  east: 26.25
+  west: 25.92
+
+grid:
+  h3_resolution: 7          # ~100 cells, ~5 km² each
+  refine_resolution: 8       # For dense areas, ~7 sub-cells
+  refine_threshold: 0.9      # Refine if results exceed 90% of platform cap
+
+booking:
+  country_code: "ro"
+  dest_id: "-1153951"
+  dest_type: "city"
+  checkin_offset_days: 14    # Days from now for check-in
+  checkout_offset_days: 15   # Days from now for check-out
+  adults: 1
+  rooms: 1
+  results_cap: 1000
+
+airbnb:
+  results_cap: 300
+  adults: 1

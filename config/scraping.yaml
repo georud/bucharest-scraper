@@ -1,0 +1,27 @@
+delays:
+  booking:
+    base_min: 3.0
+    base_max: 6.0
+  airbnb:
+    base_min: 2.0
+    base_max: 5.0
+  human_break_chance: 0.05   # 5% chance of long pause
+  human_break_min: 10.0
+  human_break_max: 30.0
+
+retry:
+  max_retries: 3
+  backoff_base: 2.0          # Exponential backoff multiplier
+  backoff_max: 120.0
+
+session:
+  csrf_refresh_interval: 30  # Refresh CSRF token every N requests
+  full_refresh_interval: 100 # Full Playwright re-bootstrap every N requests
+
+proxy:
+  enabled: false
+  rotate_on_error: true
+
+curl_cffi:
+  impersonate: "chrome131"
+  timeout: 30

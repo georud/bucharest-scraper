@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime
+
+from ...models.enums import Platform
+from ...models.listing import Listing
+from ...text import normalize_text
+
+logger = logging.getLogger(__name__)
+
+
+def parse_airbnb_results(data: dict, grid_cell_id: str = "") -> list[Listing]:
+    """Parse Airbnb StaysSearch API response into Listing objects."""
+    listings = []
+
+    try:
+        results = data["data"]["presentation"]["staysSearch"]["mapResults"]["mapSearchResults"]
+    except (KeyError, TypeError):
+        logger.warning("Unexpected Airbnb response structure")
+        return listings
+
+    for item in results:
+        try:
+            listing = _parse_airbnb_item(item, grid_cell_id)
+            if listing:
+                listings.append(listing)
+        except Exception as e:
+            logger.debug("Failed to parse Airbnb item: %s", e)
+
+    return listings
+
+
+def parse_pyairbnb_results(results: list[dict], grid_cell_id: str = "") -> list[Listing]:
+    """Parse pyairbnb library search results into Listing objects."""
+    listings = []
+
+    for item in results:
+        try:
+            listing = _parse_pyairbnb_item(item, grid_cell_id)
+            if listing:
+                listings.append(listing)
+        except Exception as e:
+            logger.debug("Failed to parse pyairbnb item: %s", e)
+
+    return listings
+
+
+def _parse_airbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
+    """Parse a single Airbnb map search result."""
+    listing_data = item.get("listing", {})
+    prop_id = str(listing_data.get("id", ""))
+    if not prop_id:
+        return None
+
+    coordinate = listing_data.get("coordinate", {})
+    lat = coordinate.get("latitude", 0.0)
+    lng = coordinate.get("longitude", 0.0)
+
+    if lat == 0.0 and lng == 0.0:
+        return None
+
+    name = normalize_text(listing_data.get("name", ""))
+    room_type = listing_data.get("roomTypeCategory", "")
+
+    # Rating
+    avg_rating = listing_data.get("avgRating")
+    reviews_count = listing_data.get("reviewsCount")
+
+    # Price
+    pricing = item.get("pricingQuote", {})
+    price = None
+    currency = "USD"
+    rate = pricing.get("rate", {})
+    if rate:
+        amount_obj = rate.get("amount")
+        if amount_obj is not None:
+            price = float(amount_obj)
+        currency = rate.get("currency", "USD")
+
+    # Superhost
+    is_superhost = listing_data.get("isSuperhost", False)
+
+    # Photo
+    context_photo = listing_data.get("contextualPictures", [])
+    photo_url = context_photo[0].get("picture") if context_photo else None
+
+    listing_id = Listing.make_id(Platform.AIRBNB, prop_id)
+
+    return Listing(
+        id=listing_id,
+        platform=Platform.AIRBNB,
+        platform_id=prop_id,
+        name=name,
+        latitude=lat,
+        longitude=lng,
+        property_type=room_type,
+        star_rating=None,
+        review_score=avg_rating,
+        review_count=reviews_count,
+        price_per_night=price,
+        currency=currency,
+        url=f"https://www.airbnb.com/rooms/{prop_id}",
+        thumbnail_url=photo_url,
+        is_superhost=is_superhost,
+        scraped_at=datetime.utcnow(),
+        grid_cell_id=grid_cell_id,
+        raw_json=json.dumps(item, default=str),
+    )
+
+
+def _parse_pyairbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
+    """Parse a single pyairbnb search result dict.
+
+    pyairbnb returns nested dicts with structure:
+        room_id, name, coordinates{latitude, longitud}, rating{value, reviewCount},
+        price{unit{amount, currency}}, images[...]
+    Note: pyairbnb has a typo — "longitud" not "longitude".
+    """
+    prop_id = str(item.get("room_id", ""))
+    if not prop_id:
+        return None
+
+    coords = item.get("coordinates", {})
+    lat = coords.get("latitude", 0.0)
+    # pyairbnb typo: "longitud" instead of "longitude"
+    lng = coords.get("longitud") or coords.get("longitude", 0.0)
+
+    if lat == 0.0 and lng == 0.0:
+        return None
+
+    name = normalize_text(item.get("name", ""))
+
+    # Price is nested: price.unit.amount / price.unit.currency
+    price_obj = item.get("price", {})
+    unit = price_obj.get("unit", {}) if isinstance(price_obj, dict) else {}
+    price = unit.get("amount")
+    currency = unit.get("currency", "USD")
+
+    # Rating is nested: rating.value / rating.reviewCount (string)
+    rating_obj = item.get("rating", {})
+    review_score = rating_obj.get("value") if isinstance(rating_obj, dict) else None
+    review_count_raw = rating_obj.get("reviewCount") if isinstance(rating_obj, dict) else None
+    review_count = int(review_count_raw) if review_count_raw else None
+
+    # Images list
+    images = item.get("images", [])
+    thumbnail_url = images[0] if images and isinstance(images[0], str) else None
+
+    listing_id = Listing.make_id(Platform.AIRBNB, prop_id)
+
+    return Listing(
+        id=listing_id,
+        platform=Platform.AIRBNB,
+        platform_id=prop_id,
+        name=name,
+        latitude=float(lat),
+        longitude=float(lng),
+        property_type=item.get("room_type") or item.get("type"),
+        star_rating=None,
+        review_score=review_score,
+        review_count=review_count,
+        price_per_night=float(price) if price is not None else None,
+        currency=currency,
+        url=f"https://www.airbnb.com/rooms/{prop_id}",
+        thumbnail_url=thumbnail_url,
+        is_superhost=item.get("is_superhost"),
+        scraped_at=datetime.utcnow(),
+        grid_cell_id=grid_cell_id,
+        raw_json=json.dumps(item, default=str),
+    )

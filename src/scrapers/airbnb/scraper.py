@@ -1,0 +1,165 @@
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+from ...config import AppConfig, DATA_DIR
+from ...anti_detect.delays import AdaptiveDelay
+from ...anti_detect.proxy import ProxyManager
+from ...grid.generator import GridCell
+from ...models.listing import Listing
+from ..base import BaseScraper
+from .parser import parse_pyairbnb_results
+
+logger = logging.getLogger(__name__)
+
+RAW_DIR = DATA_DIR / "raw" / "airbnb"
+
+
+class AirbnbScraper(BaseScraper):
+    """Airbnb scraper using pyairbnb library with fallback to Playwright."""
+
+    def __init__(self, config: AppConfig, proxy_manager: ProxyManager | None = None):
+        super().__init__(config)
+        self.delay = AdaptiveDelay(config.scraping)
+        self.proxy = proxy_manager or ProxyManager(config.proxy_urls)
+        self._pyairbnb = None
+
+    async def init_session(self) -> None:
+        """Initialize pyairbnb and prepare for scraping."""
+        from ..booking.graphql import get_dates
+
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+        self._checkin, self._checkout = get_dates(
+            self.config.city.checkin_offset_days,
+            self.config.city.checkout_offset_days,
+        )
+
+        try:
+            import pyairbnb
+            self._pyairbnb = pyairbnb
+            logger.info("Airbnb scraper initialized with pyairbnb")
+        except ImportError:
+            logger.warning("pyairbnb not installed, will use Playwright fallback only")
+
+    async def scrape_cell(self, cell: GridCell) -> list[Listing]:
+        """Scrape a single grid cell for Airbnb listings."""
+        bbox = cell.bbox
+
+        # Try pyairbnb first
+        if self._pyairbnb:
+            try:
+                listings = await self._scrape_via_pyairbnb(cell)
+                if listings:
+                    self.delay.on_success()
+                    return listings
+            except Exception as e:
+                logger.warning("pyairbnb failed for cell %s: %s", cell.cell_id, e)
+                self.delay.on_error()
+
+        # Fallback to Playwright
+        try:
+            listings = await self._scrape_via_playwright(cell)
+            self.delay.on_success()
+            return listings
+        except Exception as e:
+            logger.error("Playwright scrape failed for cell %s: %s", cell.cell_id, e)
+            self.delay.on_error()
+            return []
+
+    async def _scrape_via_pyairbnb(self, cell: GridCell) -> list[Listing]:
+        """Use pyairbnb library to search by bounding box."""
+        import asyncio
+
+        bbox = cell.bbox
+        proxy = self.proxy.get_proxy()
+
+        # pyairbnb is sync, run in executor
+        def _search():
+            return self._pyairbnb.search_all(
+                check_in=self._checkin.isoformat(),
+                check_out=self._checkout.isoformat(),
+                ne_lat=bbox["ne_lat"],
+                ne_long=bbox["ne_lng"],
+                sw_lat=bbox["sw_lat"],
+                sw_long=bbox["sw_lng"],
+                zoom_value=2,
+                price_min=0,
+                price_max=100000,
+                currency="EUR",
+                proxy_url=proxy or "",
+            )
+
+        results = await asyncio.get_running_loop().run_in_executor(None, _search)
+
+        if not results:
+            return []
+
+        # Save raw data
+        self._save_raw(cell.cell_id, results)
+
+        listings = parse_pyairbnb_results(results, cell.cell_id)
+        logger.info("Cell %s: %d Airbnb listings via pyairbnb", cell.cell_id, len(listings))
+        return listings
+
+    async def _scrape_via_playwright(self, cell: GridCell) -> list[Listing]:
+        """Fallback: use Playwright to intercept Airbnb API responses."""
+        from playwright.async_api import async_playwright
+        from .parser import parse_airbnb_results
+
+        bbox = cell.bbox
+        captured_data = []
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            )
+            page = await context.new_page()
+
+            async def handle_response(response):
+                if "StaysSearch" in response.url or "/api/v3/" in response.url:
+                    try:
+                        data = await response.json()
+                        captured_data.append(data)
+                    except Exception:
+                        pass
+
+            page.on("response", handle_response)
+
+            url = (
+                f"https://www.airbnb.com/s/Bucharest--Romania/homes"
+                f"?ne_lat={bbox['ne_lat']}&ne_lng={bbox['ne_lng']}"
+                f"&sw_lat={bbox['sw_lat']}&sw_lng={bbox['sw_lng']}"
+                f"&zoom_level=15&search_by_map=true"
+            )
+
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(3000)
+            except Exception as e:
+                logger.warning("Playwright navigation error: %s", e)
+            finally:
+                page.remove_listener("response", handle_response)
+                await browser.close()
+
+        all_listings = []
+        for data in captured_data:
+            listings = parse_airbnb_results(data, cell.cell_id)
+            all_listings.extend(listings)
+
+        logger.info("Cell %s: %d Airbnb listings via Playwright", cell.cell_id, len(all_listings))
+        return all_listings
+
+    def _save_raw(self, cell_id: str, data):
+        """Save raw API response for debugging."""
+        path = RAW_DIR / f"{cell_id}.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+
+    async def close(self) -> None:
+        """Clean up resources."""
+        logger.info("Airbnb scraper closed")

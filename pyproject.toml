@@ -1,0 +1,22 @@
+[project]
+name = "bucharest-scraper"
+version = "0.1.0"
+description = "Scrape accommodation listings from Booking.com and Airbnb maps for Bucharest"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.49",
+    "curl-cffi>=0.7",
+    "pyairbnb>=2.2",
+    "h3>=4.1",
+    "shapely>=2.0",
+    "geopandas>=1.0",
+    "folium>=0.18",
+    "pandas>=2.2",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "rapidfuzz>=3.10",
+    "tqdm>=4.67",
+]
+
+[project.scripts]
+scrape = "src.orchestrator:main"
