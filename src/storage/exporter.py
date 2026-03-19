@@ -21,16 +21,18 @@ def export_csv(db: Database, output_path: Path | None = None) -> Path:
     rows = db.conn.execute("""
         SELECT id, platform, platform_id, name, latitude, longitude,
                property_type, star_rating, review_score, review_count,
-               price_per_night, currency, url, thumbnail_url, is_superhost,
-               scraped_at, grid_cell_id
+               price_per_night, currency, url, thumbnail_url,
+               bedrooms, beds, bathrooms, max_guests,
+               is_superhost, scraped_at, grid_cell_id
         FROM listings ORDER BY platform, name
     """).fetchall()
 
     headers = [
         "id", "platform", "platform_id", "name", "latitude", "longitude",
         "property_type", "star_rating", "review_score", "review_count",
-        "price_per_night", "currency", "url", "thumbnail_url", "is_superhost",
-        "scraped_at", "grid_cell_id",
+        "price_per_night", "currency", "url", "thumbnail_url",
+        "bedrooms", "beds", "bathrooms", "max_guests",
+        "is_superhost", "scraped_at", "grid_cell_id",
     ]
 
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
@@ -50,8 +52,9 @@ def export_geojson(db: Database, output_path: Path | None = None) -> Path:
     rows = db.conn.execute("""
         SELECT id, platform, platform_id, name, latitude, longitude,
                property_type, star_rating, review_score, review_count,
-               price_per_night, currency, url, thumbnail_url, is_superhost,
-               scraped_at
+               price_per_night, currency, url, thumbnail_url,
+               bedrooms, beds, bathrooms, max_guests,
+               is_superhost, scraped_at
         FROM listings ORDER BY platform, name
     """).fetchall()
 
@@ -60,7 +63,9 @@ def export_geojson(db: Database, output_path: Path | None = None) -> Path:
         (
             lid, platform, platform_id, name, lat, lng,
             prop_type, stars, score, reviews,
-            price, currency, url, thumb, superhost, scraped,
+            price, currency, url, thumb,
+            bedrooms, beds, bathrooms, max_guests,
+            superhost, scraped,
         ) = row
 
         feature = {
@@ -78,6 +83,10 @@ def export_geojson(db: Database, output_path: Path | None = None) -> Path:
                 "currency": currency,
                 "url": url,
                 "thumbnail_url": thumb,
+                "bedrooms": bedrooms,
+                "beds": beds,
+                "bathrooms": bathrooms,
+                "max_guests": max_guests,
                 "is_superhost": bool(superhost) if superhost is not None else None,
             },
         }

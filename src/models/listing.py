@@ -23,6 +23,10 @@ class Listing:
     currency: str = "EUR"
     url: str = ""
     thumbnail_url: str | None = None
+    bedrooms: int | None = None
+    beds: int | None = None
+    bathrooms: float | None = None       # float for "1.5 bath"
+    max_guests: int | None = None
     is_superhost: bool | None = None    # Airbnb only
     scraped_at: datetime = field(default_factory=datetime.utcnow)
     grid_cell_id: str = ""
@@ -55,6 +59,10 @@ class Listing:
             self.currency,
             self.url,
             self.thumbnail_url,
+            self.bedrooms,
+            self.beds,
+            self.bathrooms,
+            self.max_guests,
             self.is_superhost,
             self.scraped_at.isoformat(),
             self.grid_cell_id,

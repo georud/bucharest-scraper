@@ -51,6 +51,13 @@ query FullSearch($input: SearchQueryInput!) {
               }
             }
             displayName { text }
+            matchingUnitConfigurations {
+              commonConfiguration {
+                nbBedrooms
+                nbBathrooms
+                nbAllBeds
+              }
+            }
             blocks {
               finalPrice { amount currency }
             }

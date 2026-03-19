@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS listings (
     currency TEXT DEFAULT 'EUR',
     url TEXT,
     thumbnail_url TEXT,
+    bedrooms INTEGER,
+    beds INTEGER,
+    bathrooms REAL,
+    max_guests INTEGER,
     is_superhost INTEGER,
     scraped_at TEXT NOT NULL,
     grid_cell_id TEXT,
@@ -75,6 +79,23 @@ class Database:
     def _init_schema(self):
         self.conn.executescript(SCHEMA)
         self.conn.commit()
+        self._migrate()
+
+    def _migrate(self):
+        """Add columns that may be missing in older databases."""
+        cursor = self.conn.execute("PRAGMA table_info(listings)")
+        existing = {row[1] for row in cursor.fetchall()}
+        new_columns = [
+            ("bedrooms", "INTEGER"),
+            ("beds", "INTEGER"),
+            ("bathrooms", "REAL"),
+            ("max_guests", "INTEGER"),
+        ]
+        for col_name, col_type in new_columns:
+            if col_name not in existing:
+                self.conn.execute(f"ALTER TABLE listings ADD COLUMN {col_name} {col_type}")
+                logger.info("Migrated: added column %s to listings", col_name)
+        self.conn.commit()
 
     def upsert_listing(self, listing: Listing) -> bool:
         """Insert or update a listing. Returns True if new, False if updated."""
@@ -82,14 +103,19 @@ class Database:
         INSERT INTO listings (
             id, platform, platform_id, name, latitude, longitude,
             property_type, star_rating, review_score, review_count,
-            price_per_night, currency, url, thumbnail_url, is_superhost,
-            scraped_at, grid_cell_id, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            price_per_night, currency, url, thumbnail_url,
+            bedrooms, beds, bathrooms, max_guests,
+            is_superhost, scraped_at, grid_cell_id, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name,
             price_per_night=excluded.price_per_night,
             review_score=excluded.review_score,
             review_count=excluded.review_count,
+            bedrooms=excluded.bedrooms,
+            beds=excluded.beds,
+            bathrooms=excluded.bathrooms,
+            max_guests=excluded.max_guests,
             scraped_at=excluded.scraped_at,
             raw_json=excluded.raw_json
         """
@@ -103,14 +129,19 @@ class Database:
         INSERT INTO listings (
             id, platform, platform_id, name, latitude, longitude,
             property_type, star_rating, review_score, review_count,
-            price_per_night, currency, url, thumbnail_url, is_superhost,
-            scraped_at, grid_cell_id, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            price_per_night, currency, url, thumbnail_url,
+            bedrooms, beds, bathrooms, max_guests,
+            is_superhost, scraped_at, grid_cell_id, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name,
             price_per_night=excluded.price_per_night,
             review_score=excluded.review_score,
             review_count=excluded.review_count,
+            bedrooms=excluded.bedrooms,
+            beds=excluded.beds,
+            bathrooms=excluded.bathrooms,
+            max_guests=excluded.max_guests,
             scraped_at=excluded.scraped_at,
             raw_json=excluded.raw_json
         """

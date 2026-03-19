@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 
 from ...models.enums import Platform
@@ -47,6 +48,31 @@ def parse_pyairbnb_results(results: list[dict], grid_cell_id: str = "") -> list[
     return listings
 
 
+def _parse_room_text(texts: list[str]) -> dict:
+    """Extract bedroom/bed/bathroom/guest counts from structured text lines.
+
+    Lines look like: "2 bedrooms", "3 beds", "1 bathroom", "4 guests".
+    """
+    info: dict = {"bedrooms": None, "beds": None, "bathrooms": None, "max_guests": None}
+    for text in texts:
+        t = text.lower().strip()
+        m = re.search(r"(\d+\.?\d*)\s*bedroom", t)
+        if m:
+            info["bedrooms"] = int(float(m.group(1)))
+        m = re.search(r"(\d+\.?\d*)\s*bed(?!room)", t)
+        if m:
+            info["beds"] = int(float(m.group(1)))
+        m = re.search(r"(\d+\.?\d*)\s*bath", t)
+        if m:
+            info["bathrooms"] = float(m.group(1))
+        m = re.search(r"(\d+)\s*guest", t)
+        if m:
+            info["max_guests"] = int(m.group(1))
+        if "studio" in t:
+            info["bedrooms"] = info["bedrooms"] or 0
+    return info
+
+
 def _parse_airbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
     """Parse a single Airbnb map search result."""
     listing_data = item.get("listing", {})
@@ -79,6 +105,18 @@ def _parse_airbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
             price = float(amount_obj)
         currency = rate.get("currency", "USD")
 
+    # Room details from structuredContent
+    room_info = {"bedrooms": None, "beds": None, "bathrooms": None, "max_guests": None}
+    sc = listing_data.get("structuredContent", {})
+    if isinstance(sc, dict):
+        primary_line = sc.get("mapPrimaryLine", [])
+        if isinstance(primary_line, list):
+            texts = [
+                e.get("body", "") if isinstance(e, dict) else str(e)
+                for e in primary_line
+            ]
+            room_info = _parse_room_text(texts)
+
     # Superhost
     is_superhost = listing_data.get("isSuperhost", False)
 
@@ -103,6 +141,10 @@ def _parse_airbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
         currency=currency,
         url=f"https://www.airbnb.com/rooms/{prop_id}",
         thumbnail_url=photo_url,
+        bedrooms=room_info["bedrooms"],
+        beds=room_info["beds"],
+        bathrooms=room_info["bathrooms"],
+        max_guests=room_info["max_guests"],
         is_superhost=is_superhost,
         scraped_at=datetime.utcnow(),
         grid_cell_id=grid_cell_id,
@@ -148,6 +190,18 @@ def _parse_pyairbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
     images = item.get("images", [])
     thumbnail_url = images[0] if images and isinstance(images[0], str) else None
 
+    # Room details from structuredContent.mapPrimaryLine
+    room_info = {"bedrooms": None, "beds": None, "bathrooms": None, "max_guests": None}
+    sc = item.get("structuredContent", {})
+    if isinstance(sc, dict):
+        primary_line = sc.get("mapPrimaryLine", [])
+        if isinstance(primary_line, list):
+            texts = [
+                e.get("body", "") if isinstance(e, dict) else str(e)
+                for e in primary_line
+            ]
+            room_info = _parse_room_text(texts)
+
     listing_id = Listing.make_id(Platform.AIRBNB, prop_id)
 
     return Listing(
@@ -165,6 +219,10 @@ def _parse_pyairbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
         currency=currency,
         url=f"https://www.airbnb.com/rooms/{prop_id}",
         thumbnail_url=thumbnail_url,
+        bedrooms=room_info["bedrooms"],
+        beds=room_info["beds"],
+        bathrooms=room_info["bathrooms"],
+        max_guests=room_info["max_guests"],
         is_superhost=item.get("is_superhost"),
         scraped_at=datetime.utcnow(),
         grid_cell_id=grid_cell_id,

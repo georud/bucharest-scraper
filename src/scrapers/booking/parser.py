@@ -76,6 +76,23 @@ def _parse_property(item: dict, country_code: str, grid_cell_id: str) -> Listing
                 if rel:
                     photo_url = f"https://cf.bstatic.com{rel}"
 
+    # Room configuration from matchingUnitConfigurations
+    bedrooms = None
+    beds = None
+    bathrooms = None
+    max_guests = None
+    units = item.get("matchingUnitConfigurations")
+    if units:
+        # Can be a single dict or a list of dicts
+        unit = units[0] if isinstance(units, list) else units
+        if isinstance(unit, dict):
+            common = unit.get("commonConfiguration") or {}
+            if isinstance(common, dict):
+                bedrooms = common.get("nbBedrooms")
+                bathrooms_raw = common.get("nbBathrooms")
+                bathrooms = float(bathrooms_raw) if bathrooms_raw is not None else None
+                beds = common.get("nbAllBeds")
+
     # URL from pageName
     page_name = basic.get("pageName", "")
     base = f"https://www.booking.com/hotel/{country_code}"
@@ -98,6 +115,10 @@ def _parse_property(item: dict, country_code: str, grid_cell_id: str) -> Listing
         currency=currency,
         url=url,
         thumbnail_url=photo_url,
+        bedrooms=bedrooms,
+        beds=beds,
+        bathrooms=bathrooms,
+        max_guests=max_guests,
         is_superhost=None,
         scraped_at=datetime.utcnow(),
         grid_cell_id=grid_cell_id,

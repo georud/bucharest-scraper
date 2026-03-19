@@ -14,7 +14,8 @@ scraper.log
 # Secrets
 .env
 
-# IDE
+# IDE / Claude Code
 .claude/
+CLAUDE.md
 .vscode/
 .idea/
