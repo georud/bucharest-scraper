@@ -61,6 +61,10 @@ class ScrapingConfig:
     proxy_rotate_on_error: bool
     curl_impersonate: str
     curl_timeout: int
+    business_booking_enabled: bool = True
+    business_airbnb_enabled: bool = True
+    business_airbnb_timeout: int = 15
+    business_airbnb_concurrency: int = 2
 
 
 @dataclass
@@ -111,6 +115,9 @@ def load_config() -> AppConfig:
     session = scraping_raw["session"]
     proxy = scraping_raw["proxy"]
     curl = scraping_raw["curl_cffi"]
+    business = scraping_raw.get("business_data", {})
+    business_booking = business.get("booking", {})
+    business_airbnb = business.get("airbnb", {})
 
     scraping = ScrapingConfig(
         booking_delay_min=delays["booking"]["base_min"],
@@ -129,6 +136,10 @@ def load_config() -> AppConfig:
         proxy_rotate_on_error=proxy["rotate_on_error"],
         curl_impersonate=curl["impersonate"],
         curl_timeout=curl["timeout"],
+        business_booking_enabled=business_booking.get("enabled", True),
+        business_airbnb_enabled=business_airbnb.get("enabled", True),
+        business_airbnb_timeout=business_airbnb.get("timeout_seconds", 15),
+        business_airbnb_concurrency=business_airbnb.get("concurrency", 2),
     )
 
     proxy_urls = []

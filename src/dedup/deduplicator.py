@@ -49,7 +49,7 @@ class Deduplicator:
             # Secondary dedup: spatial + name
             is_dup = False
             for existing in unique:
-                if existing.platform == listing.platform:
+                if existing.platform != listing.platform:
                     continue
 
                 dist = haversine_distance(

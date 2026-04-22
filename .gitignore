@@ -10,6 +10,14 @@ build/
 # Data (runtime-generated, large)
 data/
 scraper.log
+scrape_*.log
+scraper_data.db
+scraper_data.db.bak
+airbnb_*.html
+airbnb_*.json
+pdp_*.json
+venezia_dump.html
+scratch_*.py
 
 # Secrets
 .env
