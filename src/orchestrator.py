@@ -15,8 +15,9 @@ from .grid.generator import GridCell, generate_grid, refine_cell, should_refine,
 from .models.enums import Platform, ScrapeStatus
 from .scrapers.booking.scraper import BookingScraper
 from .scrapers.airbnb.scraper import AirbnbScraper
+from .scrapers.stats import ParseStats
 from .storage.database import Database
-from .storage.exporter import export_csv, export_geojson
+from .storage.exporter import export_csv, export_geojson, export_operators_csv
 from .visualization.map_builder import build_map
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ class Orchestrator:
         self.db = Database()
         self.dedup = Deduplicator()
         self.proxy = ProxyManager(config.proxy_urls)
+        # Accumulates parse/drop counts across both platforms for the audit trail.
+        self._run_parse_stats = ParseStats()
 
     async def run(
         self,
@@ -83,7 +86,16 @@ class Orchestrator:
                 elif platform == Platform.AIRBNB:
                     await self._scrape_platform_airbnb(cells, cell_map, run_id)
 
-            self.db.finish_run(run_id)
+            # Record final tallies + the parse-drop audit trail on the run row.
+            self.db.finish_run(
+                run_id,
+                total_listings=self.db.get_listing_count(),
+                completed_cells=len(cells) * len(platforms),
+                listings_dropped=self._run_parse_stats.dropped_total,
+            )
+            logger.info(
+                "Parse audit (this run): %s", self._run_parse_stats.summary()
+            )
 
         # Step 3: Enrichment passes
         logger.info("=== Running enrichment passes ===")
@@ -100,7 +112,14 @@ class Orchestrator:
             except Exception as e:
                 logger.error("Airbnb enrichment failed: %s — continuing to export", e)
 
-        # Step 4: Summary
+        # Step 4: Cross-platform linking — link the same physical flat across
+        # Booking + Airbnb so distinct-property counts are possible downstream.
+        try:
+            self._link_cross_platform()
+        except Exception as e:
+            logger.error("Cross-platform linking failed: %s — continuing to export", e)
+
+        # Step 5: Summary
         total_listings = self.db.get_listing_count()
         booking_count = self.db.get_listing_count(Platform.BOOKING)
         airbnb_count = self.db.get_listing_count(Platform.AIRBNB)
@@ -108,16 +127,45 @@ class Orchestrator:
         logger.info("=== Complete ===")
         logger.info("Total listings: %d (Booking: %d, Airbnb: %d)", total_listings, booking_count, airbnb_count)
 
-        # Step 5: Export
+        # Step 6: Export
         logger.info("Exporting data...")
         csv_path = export_csv(self.db)
         geojson_path = export_geojson(self.db)
+        operators_path = export_operators_csv(self.db)
         map_path = build_map(self.db)
 
-        logger.info("Exports: CSV=%s, GeoJSON=%s, Map=%s", csv_path, geojson_path, map_path)
+        logger.info(
+            "Exports: CSV=%s, GeoJSON=%s, Operators=%s, Map=%s",
+            csv_path, geojson_path, operators_path, map_path,
+        )
+
+        # Top operators by listing count — a quick "who controls what" readout.
+        operators = self.db.get_operator_summary()
+        if operators:
+            logger.info("Operators identified: %d", len(operators))
+            for op in operators[:5]:
+                logger.info(
+                    "  %s — %d listings (%s)",
+                    op["operator_name"] or op["operator_key"],
+                    op["listing_count"], op["platforms"],
+                )
 
         progress = self.db.get_progress_summary()
         logger.info("Progress summary: %s", progress)
+
+    def _link_cross_platform(self):
+        """Assign a shared `cross_platform_group_id` to listings that are the
+        same physical property on both Booking and Airbnb (best-effort — see
+        METHODOLOGY.md). Runs as a post-processing pass over the whole DB."""
+        listings = self.db.get_all_listings_minimal()
+        if not listings:
+            return
+        mapping = self.dedup.assign_cross_platform_groups(listings)
+        if mapping:
+            updated = self.db.set_cross_platform_groups(mapping)
+            logger.info("Cross-platform linking: wrote group ids to %d listings", updated)
+        else:
+            logger.info("Cross-platform linking: no cross-platform pairs found")
 
     async def _scrape_platform_booking(
         self, cells: list[GridCell], cell_map: dict[str, GridCell], run_id: int
@@ -179,6 +227,11 @@ class Orchestrator:
 
             await self._refine_cells(scraper, Platform.BOOKING, cell_map)
 
+        # Roll the scraper's parse-drop audit into the run total.
+        self._run_parse_stats += scraper.parse_stats
+        if scraper.parse_stats.dropped_total > 0:
+            logger.warning("Booking parse audit: %s", scraper.parse_stats.summary())
+
     async def _scrape_platform_airbnb(
         self, cells: list[GridCell], cell_map: dict[str, GridCell], run_id: int
     ):
@@ -238,6 +291,11 @@ class Orchestrator:
             pbar.close()
 
             await self._refine_cells(scraper, Platform.AIRBNB, cell_map)
+
+        # Roll the scraper's parse-drop audit into the run total.
+        self._run_parse_stats += scraper.parse_stats
+        if scraper.parse_stats.dropped_total > 0:
+            logger.warning("Airbnb parse audit: %s", scraper.parse_stats.summary())
 
     async def _enrich_booking(self, cells: list[GridCell]):
         """Run cascading dated enrichment passes for Booking to fill prices and room data."""

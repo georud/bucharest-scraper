@@ -65,6 +65,8 @@ class ScrapingConfig:
     business_airbnb_enabled: bool = True
     business_airbnb_timeout: int = 15
     business_airbnb_concurrency: int = 2
+    ron_to_eur_rate: float = 4.97
+    ron_to_eur_rate_date: str = ""
 
 
 @dataclass
@@ -118,6 +120,7 @@ def load_config() -> AppConfig:
     business = scraping_raw.get("business_data", {})
     business_booking = business.get("booking", {})
     business_airbnb = business.get("airbnb", {})
+    currency = scraping_raw.get("currency", {})
 
     scraping = ScrapingConfig(
         booking_delay_min=delays["booking"]["base_min"],
@@ -140,6 +143,8 @@ def load_config() -> AppConfig:
         business_airbnb_enabled=business_airbnb.get("enabled", True),
         business_airbnb_timeout=business_airbnb.get("timeout_seconds", 15),
         business_airbnb_concurrency=business_airbnb.get("concurrency", 2),
+        ron_to_eur_rate=currency.get("ron_to_eur_rate", 4.97),
+        ron_to_eur_rate_date=currency.get("ron_to_eur_rate_date", ""),
     )
 
     proxy_urls = []

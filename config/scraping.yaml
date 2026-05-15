@@ -26,6 +26,14 @@ curl_cffi:
   impersonate: "chrome131"
   timeout: 30
 
+currency:
+  # Booking returns prices in RON for Romania; we normalise to EUR.
+  # This is a fixed reference rate, not a daily FX feed — see METHODOLOGY.md.
+  # `price_original` / `currency_original` preserve the as-scraped value so the
+  # conversion is transparent and reversible if a better rate is needed.
+  ron_to_eur_rate: 4.97
+  ron_to_eur_rate_date: "2026-03-01"
+
 business_data:
   booking:
     enabled: true        # Inline HTML parse during detail-page enrichment — ~no extra cost

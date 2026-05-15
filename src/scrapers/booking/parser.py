@@ -6,30 +6,57 @@ from datetime import datetime
 
 from ...models.enums import Platform
 from ...models.listing import Listing
+from ...scrapers.stats import ParseStats
 from ...text import normalize_text
 
 logger = logging.getLogger(__name__)
 
-def parse_graphql_results(results: list[dict], country_code: str, grid_cell_id: str = "") -> list[Listing]:
-    """Parse FullSearch GraphQL results into Listing objects."""
+# Fallback RON→EUR rate used only when a caller does not pass one in. The
+# pipeline always passes the configured, dated rate from config/scraping.yaml.
+DEFAULT_RON_EUR_RATE = 4.97
+
+
+def parse_graphql_results(
+    results: list[dict],
+    country_code: str,
+    grid_cell_id: str = "",
+    fx_rate: float = DEFAULT_RON_EUR_RATE,
+    stats: ParseStats | None = None,
+) -> list[Listing]:
+    """Parse FullSearch GraphQL results into Listing objects.
+
+    `stats`, if provided, accumulates parse/drop counts for the audit trail.
+    """
     listings = []
 
     for item in results:
         try:
-            listing = _parse_property(item, country_code, grid_cell_id)
+            listing = _parse_property(item, country_code, grid_cell_id, fx_rate, stats)
             if listing:
                 listings.append(listing)
+                if stats is not None:
+                    stats.parsed += 1
         except Exception as e:
             logger.debug("Failed to parse property: %s", e)
+            if stats is not None:
+                stats.dropped_parse_error += 1
 
     return listings
 
 
-def _parse_property(item: dict, country_code: str, grid_cell_id: str) -> Listing | None:
+def _parse_property(
+    item: dict,
+    country_code: str,
+    grid_cell_id: str,
+    fx_rate: float = DEFAULT_RON_EUR_RATE,
+    stats: ParseStats | None = None,
+) -> Listing | None:
     """Parse a single SearchResultProperty from the GraphQL response."""
     basic = item.get("basicPropertyData", {})
     prop_id = str(basic.get("id", ""))
     if not prop_id:
+        if stats is not None:
+            stats.dropped_missing_id += 1
         return None
 
     # Coordinates
@@ -37,6 +64,8 @@ def _parse_property(item: dict, country_code: str, grid_cell_id: str) -> Listing
     lat = location.get("latitude", 0.0)
     lng = location.get("longitude", 0.0)
     if lat == 0.0 and lng == 0.0:
+        if stats is not None:
+            stats.dropped_zero_coords += 1
         return None
 
     # Name
@@ -54,17 +83,23 @@ def _parse_property(item: dict, country_code: str, grid_cell_id: str) -> Listing
     review_score = reviews.get("totalScore") if isinstance(reviews, dict) else None
     review_count = reviews.get("reviewsCount") if isinstance(reviews, dict) else None
 
-    # Price from blocks
+    # Price from blocks. `price_original` / `currency_original` preserve the
+    # as-scraped value; `price_per_night` / `currency` hold the normalised EUR.
     price = None
     currency = "EUR"
+    price_original = None
+    currency_original = None
     blocks = item.get("blocks") or []
     if blocks and isinstance(blocks, list):
         fp = blocks[0].get("finalPrice") or {}
         if isinstance(fp, dict):
             price = fp.get("amount")
             currency = fp.get("currency", "EUR")
+            if price is not None:
+                price_original = price
+                currency_original = currency
             if currency == "RON" and price is not None:
-                price = round(price / 4.97, 2)
+                price = round(price / fx_rate, 2)
                 currency = "EUR"
 
     # Photo
@@ -117,6 +152,8 @@ def _parse_property(item: dict, country_code: str, grid_cell_id: str) -> Listing
         review_count=review_count,
         price_per_night=price,
         currency=currency,
+        price_original=price_original,
+        currency_original=currency_original,
         url=url,
         thumbnail_url=photo_url,
         bedrooms=bedrooms,
@@ -130,16 +167,19 @@ def _parse_property(item: dict, country_code: str, grid_cell_id: str) -> Listing
     )
 
 
-def parse_property_page(html: str) -> dict:
+def parse_property_page(html: str, fx_rate: float = DEFAULT_RON_EUR_RATE) -> dict:
     """Extract price, room, and business/legal data from a Booking.com property page.
 
     Price/room extraction is tiered (JSON-LD → og:price → JS). Legal info is
     always attempted regardless of price presence, since the two live in
-    different parts of the page.
+    different parts of the page. `price_original` / `currency_original` keep the
+    as-scraped value; `price_per_night` / `currency` hold the normalised EUR.
     """
     result = {
         "price_per_night": None,
         "currency": None,
+        "price_original": None,
+        "currency_original": None,
         "bedrooms": None,
         "beds": None,
         "bathrooms": None,
@@ -160,6 +200,14 @@ def parse_property_page(html: str) -> dict:
         _extract_meta_tags(html, result)
     if result["price_per_night"] is None:
         _extract_js_price(html, result)
+
+    # Normalise currency: preserve the as-scraped value, convert RON→EUR.
+    if result["price_per_night"] is not None:
+        result["price_original"] = result["price_per_night"]
+        result["currency_original"] = result["currency"] or "EUR"
+        if result["currency"] == "RON":
+            result["price_per_night"] = round(result["price_per_night"] / fx_rate, 2)
+            result["currency"] = "EUR"
 
     # Structured DSA disclosure (Apollo state) — sole reliable source on Booking.
     # The regex `_extract_legal_info` fallback is intentionally NOT called: it

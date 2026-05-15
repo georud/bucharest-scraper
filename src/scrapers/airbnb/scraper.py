@@ -16,6 +16,7 @@ from ...anti_detect.proxy import ProxyManager
 from ...grid.generator import GridCell
 from ...models.listing import Listing
 from ..base import BaseScraper
+from ..stats import ParseStats
 from .parser import parse_pyairbnb_results, parse_raw_api_results, extract_pagination_cursor, parse_detail_response, parse_business_modal, parse_airbnb_business_from_html
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ class AirbnbScraper(BaseScraper):
         self._pyairbnb = None
         self._api_key: str | None = None
         self._search_hash: str | None = None
+        # Accumulates parse/drop counts across every cell this scraper handles.
+        self.parse_stats = ParseStats()
 
     async def init_session(self) -> None:
         """Initialize pyairbnb and prepare for scraping."""
@@ -155,7 +158,7 @@ class AirbnbScraper(BaseScraper):
                 if page == 0:
                     first_raw = raw_json
 
-                listings = parse_raw_api_results(raw_json, cell.cell_id)
+                listings = parse_raw_api_results(raw_json, cell.cell_id, stats=self.parse_stats)
                 all_listings.extend(listings)
                 page += 1
 
@@ -207,7 +210,7 @@ class AirbnbScraper(BaseScraper):
 
         self._save_raw(cell.cell_id + "_fallback", results)
 
-        listings = parse_pyairbnb_results(results, cell.cell_id)
+        listings = parse_pyairbnb_results(results, cell.cell_id, stats=self.parse_stats)
         logger.info("Cell %s: %d Airbnb listings via pyairbnb fallback", cell.cell_id, len(listings))
         return listings
 
@@ -257,7 +260,7 @@ class AirbnbScraper(BaseScraper):
 
         all_listings = []
         for data in captured_data:
-            listings = parse_airbnb_results(data, cell.cell_id)
+            listings = parse_airbnb_results(data, cell.cell_id, stats=self.parse_stats)
             all_listings.extend(listings)
 
         logger.info("Cell %s: %d Airbnb listings via Playwright", cell.cell_id, len(all_listings))

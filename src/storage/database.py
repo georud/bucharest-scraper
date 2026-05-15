@@ -51,7 +51,11 @@ CREATE TABLE IF NOT EXISTS listings (
     host_id TEXT,
     host_response_rate TEXT,
     host_response_time TEXT,
-    host_join_date TEXT
+    host_join_date TEXT,
+    price_original REAL,
+    currency_original TEXT,
+    cross_platform_group_id TEXT,
+    first_seen_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_listings_platform ON listings(platform);
@@ -76,6 +80,7 @@ CREATE TABLE IF NOT EXISTS scrape_runs (
     total_cells INTEGER,
     completed_cells INTEGER DEFAULT 0,
     total_listings INTEGER DEFAULT 0,
+    listings_dropped INTEGER DEFAULT 0,
     status TEXT DEFAULT 'running'
 );
 """
@@ -118,11 +123,22 @@ class Database:
             ("host_response_rate", "TEXT"),
             ("host_response_time", "TEXT"),
             ("host_join_date", "TEXT"),
+            ("price_original", "REAL"),
+            ("currency_original", "TEXT"),
+            ("cross_platform_group_id", "TEXT"),
+            ("first_seen_at", "TEXT"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing:
                 self.conn.execute(f"ALTER TABLE listings ADD COLUMN {col_name} {col_type}")
                 logger.info("Migrated: added column %s to listings", col_name)
+
+        # scrape_runs.listings_dropped — added after the table was first shipped
+        run_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(scrape_runs)")}
+        if "listings_dropped" not in run_cols:
+            self.conn.execute("ALTER TABLE scrape_runs ADD COLUMN listings_dropped INTEGER DEFAULT 0")
+            logger.info("Migrated: added column listings_dropped to scrape_runs")
+
         self.conn.commit()
 
     def upsert_listing(self, listing: Listing) -> bool:
@@ -137,13 +153,16 @@ class Database:
             business_name, business_registration_number, business_vat,
             business_address, business_email, business_phone,
             business_type, business_country, business_trade_register_name,
-            host_name, host_id, host_response_rate, host_response_time, host_join_date
+            host_name, host_id, host_response_rate, host_response_time, host_join_date,
+            price_original, currency_original, cross_platform_group_id, first_seen_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name,
             price_per_night=COALESCE(excluded.price_per_night, price_per_night),
             currency=excluded.currency,
+            price_original=COALESCE(excluded.price_original, price_original),
+            currency_original=COALESCE(excluded.currency_original, currency_original),
             review_score=COALESCE(excluded.review_score, review_score),
             review_count=COALESCE(excluded.review_count, review_count),
             bedrooms=COALESCE(excluded.bedrooms, bedrooms),
@@ -164,6 +183,7 @@ class Database:
             host_response_rate=COALESCE(excluded.host_response_rate, host_response_rate),
             host_response_time=COALESCE(excluded.host_response_time, host_response_time),
             host_join_date=COALESCE(excluded.host_join_date, host_join_date),
+            cross_platform_group_id=COALESCE(excluded.cross_platform_group_id, cross_platform_group_id),
             scraped_at=excluded.scraped_at,
             raw_json=excluded.raw_json
 """
@@ -183,13 +203,16 @@ class Database:
             business_name, business_registration_number, business_vat,
             business_address, business_email, business_phone,
             business_type, business_country, business_trade_register_name,
-            host_name, host_id, host_response_rate, host_response_time, host_join_date
+            host_name, host_id, host_response_rate, host_response_time, host_join_date,
+            price_original, currency_original, cross_platform_group_id, first_seen_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name,
             price_per_night=COALESCE(excluded.price_per_night, price_per_night),
             currency=excluded.currency,
+            price_original=COALESCE(excluded.price_original, price_original),
+            currency_original=COALESCE(excluded.currency_original, currency_original),
             review_score=COALESCE(excluded.review_score, review_score),
             review_count=COALESCE(excluded.review_count, review_count),
             bedrooms=COALESCE(excluded.bedrooms, bedrooms),
@@ -210,6 +233,7 @@ class Database:
             host_response_rate=COALESCE(excluded.host_response_rate, host_response_rate),
             host_response_time=COALESCE(excluded.host_response_time, host_response_time),
             host_join_date=COALESCE(excluded.host_join_date, host_join_date),
+            cross_platform_group_id=COALESCE(excluded.cross_platform_group_id, cross_platform_group_id),
             scraped_at=excluded.scraped_at,
             raw_json=excluded.raw_json
 """
@@ -224,6 +248,8 @@ class Database:
         UPDATE listings SET
             price_per_night = COALESCE(price_per_night, ?),
             currency = COALESCE(?, currency),
+            price_original = COALESCE(price_original, ?),
+            currency_original = COALESCE(currency_original, ?),
             bedrooms = COALESCE(bedrooms, ?),
             beds = COALESCE(beds, ?),
             bathrooms = COALESCE(bathrooms, ?),
@@ -251,6 +277,8 @@ class Database:
             rows.append((
                 lst.price_per_night,
                 lst.currency,
+                lst.price_original,
+                lst.currency_original,
                 lst.bedrooms,
                 lst.beds,
                 lst.bathrooms,
@@ -288,7 +316,8 @@ class Database:
                       business_name, business_registration_number, business_vat,
                       business_address, business_email, business_phone,
                       business_type, business_country, business_trade_register_name,
-                      host_name, host_id, host_response_rate, host_response_time, host_join_date
+                      host_name, host_id, host_response_rate, host_response_time, host_join_date,
+                      price_original, currency_original, cross_platform_group_id, first_seen_at
                FROM listings
                WHERE platform = ?
                  AND beds IS NULL AND bathrooms IS NULL AND max_guests IS NULL""",
@@ -316,6 +345,9 @@ class Database:
                 host_name=row[31], host_id=row[32],
                 host_response_rate=row[33], host_response_time=row[34],
                 host_join_date=row[35],
+                price_original=row[36], currency_original=row[37],
+                cross_platform_group_id=row[38],
+                first_seen_at=datetime.fromisoformat(row[39]) if row[39] else datetime.utcnow(),
             ))
         return listings
 
@@ -330,7 +362,8 @@ class Database:
                       business_name, business_registration_number, business_vat,
                       business_address, business_email, business_phone,
                       business_type, business_country, business_trade_register_name,
-                      host_name, host_id, host_response_rate, host_response_time, host_join_date
+                      host_name, host_id, host_response_rate, host_response_time, host_join_date,
+                      price_original, currency_original, cross_platform_group_id, first_seen_at
                FROM listings
                WHERE platform = ? AND price_per_night IS NULL""",
             (platform.value,),
@@ -357,6 +390,9 @@ class Database:
                 host_name=row[31], host_id=row[32],
                 host_response_rate=row[33], host_response_time=row[34],
                 host_join_date=row[35],
+                price_original=row[36], currency_original=row[37],
+                cross_platform_group_id=row[38],
+                first_seen_at=datetime.fromisoformat(row[39]) if row[39] else datetime.utcnow(),
             ))
         return listings
 
@@ -409,7 +445,8 @@ class Database:
                         business_name, business_registration_number, business_vat,
                         business_address, business_email, business_phone,
                         business_type, business_country, business_trade_register_name,
-                        host_name, host_id, host_response_rate, host_response_time, host_join_date
+                        host_name, host_id, host_response_rate, host_response_time, host_join_date,
+                        price_original, currency_original, cross_platform_group_id, first_seen_at
                  FROM listings
                  WHERE platform = ?
                    AND (
@@ -445,6 +482,9 @@ class Database:
                 host_name=row[31], host_id=row[32],
                 host_response_rate=row[33], host_response_time=row[34],
                 host_join_date=row[35],
+                price_original=row[36], currency_original=row[37],
+                cross_platform_group_id=row[38],
+                first_seen_at=datetime.fromisoformat(row[39]) if row[39] else datetime.utcnow(),
             ))
         return listings
 
@@ -543,12 +583,105 @@ class Database:
         )
         self.conn.commit()
 
-    def finish_run(self, run_id: int):
+    def finish_run(
+        self,
+        run_id: int,
+        total_listings: int | None = None,
+        completed_cells: int | None = None,
+        listings_dropped: int | None = None,
+    ):
+        """Mark a run complete and record final tallies for the audit trail."""
         self.conn.execute(
-            "UPDATE scrape_runs SET completed_at=?, status='completed' WHERE id=?",
-            (datetime.utcnow().isoformat(), run_id),
+            """UPDATE scrape_runs
+               SET completed_at = ?,
+                   status = 'completed',
+                   total_listings = COALESCE(?, total_listings),
+                   completed_cells = COALESCE(?, completed_cells),
+                   listings_dropped = COALESCE(?, listings_dropped)
+               WHERE id = ?""",
+            (
+                datetime.utcnow().isoformat(),
+                total_listings,
+                completed_cells,
+                listings_dropped,
+                run_id,
+            ),
         )
         self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Cross-platform linking + operator aggregation (data-journalism views)
+    # ------------------------------------------------------------------
+
+    def set_cross_platform_groups(self, mapping: dict[str, str]) -> int:
+        """Bulk-write `cross_platform_group_id` for matched listings.
+
+        `mapping` is {listing_id: group_id}. Listings not in the mapping are
+        left untouched. Returns the number of rows updated.
+        """
+        if not mapping:
+            return 0
+        rows = [(group_id, listing_id) for listing_id, group_id in mapping.items()]
+        self.conn.executemany(
+            "UPDATE listings SET cross_platform_group_id = ? WHERE id = ?",
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def get_all_listings_minimal(self) -> list[Listing]:
+        """Return every listing with the fields the deduplicator needs.
+
+        Lighter than the `get_listings_missing_*` readers — used by the
+        cross-platform linking phase, which only needs id/platform/name/coords.
+        """
+        rows = self.conn.execute(
+            "SELECT id, platform, platform_id, name, latitude, longitude "
+            "FROM listings WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+        ).fetchall()
+        return [
+            Listing(
+                id=r[0], platform=Platform(r[1]), platform_id=r[2],
+                name=r[3] or "", latitude=r[4], longitude=r[5],
+            )
+            for r in rows
+        ]
+
+    def get_operator_summary(self) -> list[dict]:
+        """Group listings by operator for the 'who controls what' view.
+
+        Operator key precedence: business_registration_number → business_name →
+        host_id. Only rows with at least one of those are returned. One row per
+        operator, with listing count, platforms present and professional flag.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT
+                COALESCE(business_registration_number, business_name, host_id) AS operator_key,
+                COALESCE(MAX(business_name), MAX(host_name))                   AS operator_name,
+                MAX(business_registration_number)                             AS registration_number,
+                MAX(business_trade_register_name)                             AS trade_register,
+                GROUP_CONCAT(DISTINCT platform)                               AS platforms,
+                COUNT(*)                                                      AS listing_count,
+                SUM(CASE WHEN business_type = 'Professional' THEN 1 ELSE 0 END) AS professional_listings
+            FROM listings
+            WHERE COALESCE(business_registration_number, business_name, host_id) IS NOT NULL
+            GROUP BY operator_key
+            ORDER BY listing_count DESC
+            """
+        ).fetchall()
+        return [
+            {
+                "operator_key": r[0],
+                "operator_name": r[1],
+                "registration_number": r[2],
+                "trade_register": r[3],
+                "platforms": r[4],
+                "listing_count": r[5],
+                "professional_listings": r[6],
+            }
+            for r in rows
+        ]
 
     def close(self):
         self.conn.close()

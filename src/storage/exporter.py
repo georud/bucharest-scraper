@@ -21,6 +21,10 @@ _EXPORT_COLUMNS = [
     "price_per_night", "currency", "url", "thumbnail_url",
     "bedrooms", "beds", "bathrooms", "max_guests",
     "is_superhost", "scraped_at", "grid_cell_id",
+    # Provenance + currency transparency
+    "first_seen_at", "price_original", "currency_original",
+    # Cross-platform linkage (same physical flat on Booking + Airbnb)
+    "cross_platform_group_id",
     # Business / DSA disclosure
     "business_name", "business_registration_number", "business_vat",
     "business_address", "business_email", "business_phone",
@@ -82,4 +86,28 @@ def export_geojson(db: Database, output_path: Path | None = None) -> Path:
         json.dump(geojson, f, ensure_ascii=False, indent=2)
 
     logger.info("Exported %d features to %s", len(features), path)
+    return path
+
+
+_OPERATOR_COLUMNS = [
+    "operator_key", "operator_name", "registration_number",
+    "trade_register", "platforms", "listing_count", "professional_listings",
+]
+
+
+def export_operators_csv(db: Database, output_path: Path | None = None) -> Path:
+    """Export one row per operator — listings grouped by registration number /
+    business name / host id. Lets a reader answer "who controls how many
+    listings" directly. See METHODOLOGY.md → Unit of analysis."""
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = output_path or EXPORTS_DIR / "operators.csv"
+
+    operators = db.get_operator_summary()
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(_OPERATOR_COLUMNS)
+        for op in operators:
+            writer.writerow([op[c] for c in _OPERATOR_COLUMNS])
+
+    logger.info("Exported %d operators to %s", len(operators), path)
     return path

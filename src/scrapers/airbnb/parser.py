@@ -7,6 +7,7 @@ from datetime import datetime
 
 from ...models.enums import Platform
 from ...models.listing import Listing
+from ...scrapers.stats import ParseStats
 from ...text import normalize_text
 
 logger = logging.getLogger(__name__)
@@ -24,11 +25,15 @@ def _get_nested(d: dict, path: str, default=None):
     return current
 
 
-def parse_raw_api_results(raw_json: dict, grid_cell_id: str = "") -> list[Listing]:
+def parse_raw_api_results(
+    raw_json: dict, grid_cell_id: str = "", stats: ParseStats | None = None
+) -> list[Listing]:
     """Parse raw Airbnb StaysSearch API JSON directly, bypassing pyairbnb's standardize.
 
     This avoids the `case _: continue` bug in pyairbnb's from_search() that silently
     drops listings whose secondary price string has 4+ words.
+
+    `stats`, if provided, accumulates parse/drop counts for the audit trail.
     """
     listings = []
 
@@ -41,11 +46,15 @@ def parse_raw_api_results(raw_json: dict, grid_cell_id: str = "") -> list[Listin
             if _get_nested(result, "__typename") != "StaySearchResult":
                 continue
 
-            listing = _parse_raw_result(result, grid_cell_id)
+            listing = _parse_raw_result(result, grid_cell_id, stats)
             if listing:
                 listings.append(listing)
+                if stats is not None:
+                    stats.parsed += 1
         except Exception as e:
             logger.debug("Failed to parse raw Airbnb result: %s", e)
+            if stats is not None:
+                stats.dropped_parse_error += 1
 
     return listings
 
@@ -55,7 +64,9 @@ def extract_pagination_cursor(raw_json: dict) -> str | None:
     return _get_nested(raw_json, "data.presentation.staysSearch.results.paginationInfo.nextPageCursor")
 
 
-def _parse_raw_result(result: dict, grid_cell_id: str) -> Listing | None:
+def _parse_raw_result(
+    result: dict, grid_cell_id: str, stats: ParseStats | None = None
+) -> Listing | None:
     """Parse a single raw StaySearchResult into a Listing."""
     from pyairbnb.standardize import decode_listing_id
 
@@ -63,12 +74,16 @@ def _parse_raw_result(result: dict, grid_cell_id: str) -> Listing | None:
     raw_id = _get_nested(result, "demandStayListing.id", "")
     prop_id = str(decode_listing_id(raw_id))
     if not prop_id or prop_id == "0":
+        if stats is not None:
+            stats.dropped_missing_id += 1
         return None
 
     # Coordinates
     lat = _get_nested(result, "demandStayListing.location.coordinate.latitude", 0.0)
     lng = _get_nested(result, "demandStayListing.location.coordinate.longitude", 0.0)
     if lat == 0.0 and lng == 0.0:
+        if stats is not None:
+            stats.dropped_zero_coords += 1
         return None
 
     # Name
@@ -154,6 +169,8 @@ def _parse_raw_result(result: dict, grid_cell_id: str) -> Listing | None:
         review_count=review_count,
         price_per_night=price,
         currency=currency,
+        price_original=price,
+        currency_original=currency,
         url=f"https://www.airbnb.com/rooms/{prop_id}",
         thumbnail_url=photo_url,
         bedrooms=room_info["bedrooms"],
@@ -204,7 +221,9 @@ def parse_detail_response(detail: dict) -> dict:
     return result
 
 
-def parse_airbnb_results(data: dict, grid_cell_id: str = "") -> list[Listing]:
+def parse_airbnb_results(
+    data: dict, grid_cell_id: str = "", stats: ParseStats | None = None
+) -> list[Listing]:
     """Parse Airbnb StaysSearch API response into Listing objects."""
     listings = []
 
@@ -216,26 +235,36 @@ def parse_airbnb_results(data: dict, grid_cell_id: str = "") -> list[Listing]:
 
     for item in results:
         try:
-            listing = _parse_airbnb_item(item, grid_cell_id)
+            listing = _parse_airbnb_item(item, grid_cell_id, stats)
             if listing:
                 listings.append(listing)
+                if stats is not None:
+                    stats.parsed += 1
         except Exception as e:
             logger.debug("Failed to parse Airbnb item: %s", e)
+            if stats is not None:
+                stats.dropped_parse_error += 1
 
     return listings
 
 
-def parse_pyairbnb_results(results: list[dict], grid_cell_id: str = "") -> list[Listing]:
+def parse_pyairbnb_results(
+    results: list[dict], grid_cell_id: str = "", stats: ParseStats | None = None
+) -> list[Listing]:
     """Parse pyairbnb library search results into Listing objects."""
     listings = []
 
     for item in results:
         try:
-            listing = _parse_pyairbnb_item(item, grid_cell_id)
+            listing = _parse_pyairbnb_item(item, grid_cell_id, stats)
             if listing:
                 listings.append(listing)
+                if stats is not None:
+                    stats.parsed += 1
         except Exception as e:
             logger.debug("Failed to parse pyairbnb item: %s", e)
+            if stats is not None:
+                stats.dropped_parse_error += 1
 
     return listings
 
@@ -743,11 +772,15 @@ def _parse_room_text(texts: list[str]) -> dict:
     return info
 
 
-def _parse_airbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
+def _parse_airbnb_item(
+    item: dict, grid_cell_id: str, stats: ParseStats | None = None
+) -> Listing | None:
     """Parse a single Airbnb map search result."""
     listing_data = item.get("listing", {})
     prop_id = str(listing_data.get("id", ""))
     if not prop_id:
+        if stats is not None:
+            stats.dropped_missing_id += 1
         return None
 
     coordinate = listing_data.get("coordinate", {})
@@ -755,6 +788,8 @@ def _parse_airbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
     lng = coordinate.get("longitude", 0.0)
 
     if lat == 0.0 and lng == 0.0:
+        if stats is not None:
+            stats.dropped_zero_coords += 1
         return None
 
     name = normalize_text(listing_data.get("name", ""))
@@ -828,6 +863,8 @@ def _parse_airbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
         review_count=reviews_count,
         price_per_night=price,
         currency=currency,
+        price_original=price,
+        currency_original=currency,
         url=f"https://www.airbnb.com/rooms/{prop_id}",
         thumbnail_url=photo_url,
         bedrooms=room_info["bedrooms"],
@@ -841,7 +878,9 @@ def _parse_airbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
     )
 
 
-def _parse_pyairbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
+def _parse_pyairbnb_item(
+    item: dict, grid_cell_id: str, stats: ParseStats | None = None
+) -> Listing | None:
     """Parse a single pyairbnb search result dict.
 
     pyairbnb returns nested dicts with structure:
@@ -851,6 +890,8 @@ def _parse_pyairbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
     """
     prop_id = str(item.get("room_id", ""))
     if not prop_id:
+        if stats is not None:
+            stats.dropped_missing_id += 1
         return None
 
     coords = item.get("coordinates", {})
@@ -859,6 +900,8 @@ def _parse_pyairbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
     lng = coords.get("longitud") or coords.get("longitude", 0.0)
 
     if lat == 0.0 and lng == 0.0:
+        if stats is not None:
+            stats.dropped_zero_coords += 1
         return None
 
     name = normalize_text(item.get("name", ""))
@@ -906,6 +949,8 @@ def _parse_pyairbnb_item(item: dict, grid_cell_id: str) -> Listing | None:
         review_count=review_count,
         price_per_night=float(price) if price is not None else None,
         currency=currency,
+        price_original=float(price) if price is not None else None,
+        currency_original=currency,
         url=f"https://www.airbnb.com/rooms/{prop_id}",
         thumbnail_url=thumbnail_url,
         bedrooms=room_info["bedrooms"],

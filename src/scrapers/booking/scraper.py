@@ -14,6 +14,7 @@ from ...anti_detect.proxy import ProxyManager
 from ...grid.generator import GridCell
 from ...models.listing import Listing
 from ..base import BaseScraper
+from ..stats import ParseStats
 from .graphql import get_dates
 from .parser import parse_graphql_results, parse_property_page
 
@@ -87,6 +88,9 @@ class BookingScraper(BaseScraper):
         self._http: Session | None = None
         self._checkin: date | None = None
         self._checkout: date | None = None
+        # Accumulates parse/drop counts across every cell this scraper handles.
+        self.parse_stats = ParseStats()
+        self._fx_rate = config.scraping.ron_to_eur_rate
 
     async def init_session(self) -> None:
         """Prepare HTTP client."""
@@ -171,7 +175,10 @@ class BookingScraper(BaseScraper):
             if not results:
                 break
 
-            listings = parse_graphql_results(results, self.config.city.booking_country_code, cell.cell_id)
+            listings = parse_graphql_results(
+                results, self.config.city.booking_country_code, cell.cell_id,
+                fx_rate=self._fx_rate, stats=self.parse_stats,
+            )
             new_count = 0
             for lst in listings:
                 if lst.id not in seen_ids:
@@ -273,7 +280,10 @@ class BookingScraper(BaseScraper):
                     if not results:
                         break
 
-                    listings = parse_graphql_results(results, self.config.city.booking_country_code, cell.cell_id)
+                    listings = parse_graphql_results(
+                        results, self.config.city.booking_country_code, cell.cell_id,
+                        fx_rate=self._fx_rate, stats=self.parse_stats,
+                    )
                     new_count = 0
                     for lst in listings:
                         if lst.id not in seen_ids:
@@ -384,11 +394,13 @@ class BookingScraper(BaseScraper):
                             # Brief settle for JS to inject Apollo state
                             await page.wait_for_timeout(500)
                             html = await page.content()
-                            fields = parse_property_page(html)
+                            fields = parse_property_page(html, fx_rate=self._fx_rate)
 
                             if fields["price_per_night"] is not None and lst.price_per_night is None:
                                 lst.price_per_night = fields["price_per_night"]
                                 lst.currency = fields["currency"] or "EUR"
+                                lst.price_original = fields["price_original"]
+                                lst.currency_original = fields["currency_original"]
                             for room_field in ("bedrooms", "beds", "bathrooms", "max_guests"):
                                 if fields[room_field] is not None and getattr(lst, room_field) is None:
                                     setattr(lst, room_field, fields[room_field])

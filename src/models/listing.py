@@ -45,6 +45,10 @@ class Listing:
     host_response_rate: str | None = None              # e.g. "100%"
     host_response_time: str | None = None              # e.g. "Responds within an hour"
     host_join_date: str | None = None                  # e.g. "Joined in 2019"
+    price_original: float | None = None                # as-scraped price before RON→EUR
+    currency_original: str | None = None               # as-scraped currency (e.g. "RON")
+    cross_platform_group_id: str | None = None          # shared id for same flat on both platforms
+    first_seen_at: datetime = field(default_factory=datetime.utcnow)  # immutable; set once on insert
 
     @classmethod
     def make_id(cls, platform: Platform, platform_id: str) -> str:
@@ -95,4 +99,8 @@ class Listing:
             self.host_response_rate,
             self.host_response_time,
             self.host_join_date,
+            self.price_original,
+            self.currency_original,
+            self.cross_platform_group_id,
+            self.first_seen_at.isoformat(),
         )
