@@ -52,7 +52,10 @@ def build_map(db: Database, output_path: Path | None = None) -> Path:
                business_name, business_registration_number, business_vat,
                business_address, business_email, business_phone,
                business_type, business_country, business_trade_register_name,
-               host_name, host_id, host_response_rate, host_response_time, host_join_date
+               host_name, host_id, host_response_rate, host_response_time, host_join_date,
+               COALESCE(latitude_best, latitude) AS lat_plot,
+               COALESCE(longitude_best, longitude) AS lng_plot,
+               location_precision, position_confidence, location_source
         FROM listings
         WHERE latitude != 0 AND longitude != 0
     """).fetchall()
@@ -66,6 +69,8 @@ def build_map(db: Database, output_path: Path | None = None) -> Path:
         "business_address", "business_email", "business_phone",
         "business_type", "business_country", "business_trade_register_name",
         "host_name", "host_id", "host_response_rate", "host_response_time", "host_join_date",
+        "lat_plot", "lng_plot",
+        "location_precision", "position_confidence", "location_source",
     ]
 
     booking_count = 0
@@ -79,7 +84,7 @@ def build_map(db: Database, output_path: Path | None = None) -> Path:
             or PLATFORM_COLORS.get(r["platform"], "gray")
 
         marker = folium.Marker(
-            location=[r["latitude"], r["longitude"]],
+            location=[r["lat_plot"], r["lng_plot"]],
             popup=folium.Popup(popup_html, max_width=420),
             tooltip=f"{r['name']} · {r['platform']}",
             icon=folium.Icon(color=color, icon="info-sign"),
@@ -193,8 +198,14 @@ def _build_popup(r: dict) -> str:
 
     # Location
     loc_table = []
-    loc_table.append(_row("Coords", f'{r["latitude"]:.5f}, {r["longitude"]:.5f}'))
+    loc_table.append(_row("Coords", f'{r["lat_plot"]:.5f}, {r["lng_plot"]:.5f}'))
     loc_table.append(_row("Cell", r["grid_cell_id"]))
+    # Location precision line
+    precision = r.get("location_precision") or "unverified"
+    conf = r.get("position_confidence")
+    source = r.get("location_source") or "platform_coord"
+    precision_val = precision + (f" (confidence {conf:.2f}, via {source})" if conf is not None else "")
+    loc_table.append(_row("Location", precision_val))
     loc_rows = "".join(x for x in loc_table if x)
     if loc_rows:
         parts.append(
