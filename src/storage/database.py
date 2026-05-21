@@ -758,6 +758,20 @@ class Database:
         self.conn.commit()
         return len(mapping)
 
+    def reset_curation_columns(self) -> None:
+        """Clear all curation-derived columns so the stage recomputes from
+        scratch (curation is authoritative for these). The geocode_cache table
+        is NOT touched, so re-geocoding stays cache-fast."""
+        self.conn.execute(
+            """UPDATE listings SET
+                 operator_id=NULL, property_group_id=NULL, cross_platform_group_id=NULL,
+                 latitude_geocoded=NULL, longitude_geocoded=NULL,
+                 latitude_best=NULL, longitude_best=NULL, geocoded_address=NULL,
+                 location_precision=NULL, location_source=NULL,
+                 est_accuracy_m=NULL, position_confidence=NULL"""
+        )
+        self.conn.commit()
+
     def set_property_groups(self, mapping: dict[str, str],
                             cross_platform: set[str]) -> int:
         """Write property_group_id; set cross_platform_group_id to the group id
