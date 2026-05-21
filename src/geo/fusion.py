@@ -45,7 +45,7 @@ def _weighted_mean(obs: list[Observation]) -> tuple[float, float, float]:
     return x, y, sigma
 
 
-def fuse_observations(observations: list[Observation]) -> FusedPosition:
+def fuse_observations(observations: list[Observation], outlier_m: float = _OUTLIER_M) -> FusedPosition:
     """Inverse-variance weighted fusion with >1 km outlier rejection.
 
     Outlier filter anchors on the highest-precision (smallest sigma) point so
@@ -59,7 +59,7 @@ def fuse_observations(observations: list[Observation]) -> FusedPosition:
     anchor = min(obs, key=lambda o: o.sigma_m)
     ax, ay = _to_local(anchor.latitude, anchor.longitude)
     kept = [o for o in obs
-            if math.dist((ax, ay), _to_local(o.latitude, o.longitude)) <= _OUTLIER_M]
+            if math.dist((ax, ay), _to_local(o.latitude, o.longitude)) <= outlier_m]
     if not kept:
         kept = obs
     x, y, sigma = _weighted_mean(kept)

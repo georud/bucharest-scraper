@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections import Counter, defaultdict
 
+from ..dedup.deduplicator import haversine_distance
 from ..dedup.operators import assign_operator_ids
 from ..dedup.property_groups import assign_property_groups
 from ..dedup.validate import dedup_metrics
@@ -38,13 +39,15 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
     logger.info("Curation: %d listings carry an operator_id", len(operator_map))
 
     # 2. Property groups
-    group_map, cross_groups, identity_groups = assign_property_groups(rows, operator_map)
+    group_map, cross_groups, identity_groups = assign_property_groups(rows, operator_map, dedup_cfg=getattr(config, "dedup", None))
     db.set_property_groups(group_map, cross_groups)
     logger.info("Curation: %d listings in %d property groups (%d cross-platform)",
                 len(group_map), len(set(group_map.values())), len(cross_groups))
 
     # 3. Geocode Booking addresses + collect scraped/geocoded observations.
     geocfg = getattr(config, "geocoding", None)
+    fusion_cfg = getattr(config, "fusion", None)
+    geo_sigma = getattr(fusion_cfg, "sigma_geocoded_m", SIGMA_GEOCODED)
     geocoder = Geocoder(
         db, fetch_fn=fetch_fn,
         base_url=getattr(geocfg, "nominatim_url", "https://nominatim.openstreetmap.org/search"),
@@ -67,7 +70,7 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
         lid = r["id"]
         gk = group_key(lid)
         _, sigma = classify_scraped_precision(
-            r, stack[(round(r["latitude"], 6), round(r["longitude"], 6))])
+            r, stack[(round(r["latitude"], 6), round(r["longitude"], 6))], sigmas=fusion_cfg)
         cap_date = (r.get("scraped_at") or "")[:10]
         observations.append((lid, group_map.get(lid), cap_date, r["platform"],
                              "scraped", r["latitude"], r["longitude"], sigma))
@@ -80,8 +83,8 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
                 if hit:
                     geocoded_map[lid] = (hit[0], hit[1], address)
                     observations.append((lid, group_map.get(lid), cap_date, r["platform"],
-                                        "geocoded", hit[0], hit[1], SIGMA_GEOCODED))
-                    fuse_inputs[gk].append(Observation(lid, hit[0], hit[1], SIGMA_GEOCODED, "geocoded"))
+                                        "geocoded", hit[0], hit[1], geo_sigma))
+                    fuse_inputs[gk].append(Observation(lid, hit[0], hit[1], geo_sigma, "geocoded"))
 
     # 3b. Temporal backfill (historical observations from a prior capture).
     for (lid, lat, lng, sigma_m, cap_date, platform) in (backfill_rows or []):
@@ -118,8 +121,26 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
             }
     db.set_fused_positions(fused_map)
 
+    # Flag cross-platform groups whose Booking vs Airbnb observations disagree
+    # by more than the configured distance — a probable false-positive link.
+    disagreement_m = getattr(fusion_cfg, "disagreement_km", 1.0) * 1000.0
+    geo_conflicts: list[str] = []
+    for gk, obs in fuse_inputs.items():
+        bk = [(o.latitude, o.longitude) for o in obs
+              if o.listing_id in by_id and by_id[o.listing_id]["platform"] == "booking"]
+        ab = [(o.latitude, o.longitude) for o in obs
+              if o.listing_id in by_id and by_id[o.listing_id]["platform"] == "airbnb"]
+        if bk and ab:
+            maxd = max(haversine_distance(b[0], b[1], a[0], a[1]) for b in bk for a in ab)
+            if maxd > disagreement_m:
+                geo_conflicts.append(gk)
+    if geo_conflicts:
+        logger.warning("Curation: %d cross-platform groups disagree >%.0fm on position",
+                       len(geo_conflicts), disagreement_m)
+
     # 5. Verification (exclude identity/operator-derived groups to avoid circularity)
     metrics = dedup_metrics(rows, group_map, identity_groups)
+    metrics["geo_conflict_groups"] = geo_conflicts
     logger.info("Curation metrics: %s", metrics)
     try:
         from ..storage.exporter import export_dedup_metrics, export_dedup_review

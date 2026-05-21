@@ -827,22 +827,6 @@ class Database:
         self.conn.commit()
         return len(observations)
 
-    def add_position_observations(self, observations: list[tuple]) -> int:
-        """observations: list of (listing_id, property_group_id, capture_date,
-        platform, source, latitude, longitude, sigma_m)."""
-        if not observations:
-            return 0
-        now = datetime.utcnow().isoformat()
-        self.conn.executemany(
-            """INSERT INTO position_observations
-               (listing_id, property_group_id, capture_date, platform, source,
-                latitude, longitude, sigma_m, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [obs + (now,) for obs in observations],
-        )
-        self.conn.commit()
-        return len(observations)
-
     def set_geocoded(self, mapping: dict[str, tuple]) -> int:
         """mapping: {listing_id: (lat, lng, geocoded_address)}."""
         if not mapping:

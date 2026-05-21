@@ -73,8 +73,10 @@ def export_geojson(db: Database, output_path: Path | None = None) -> Path:
     features = []
     for row in rows:
         props = dict(zip(_EXPORT_COLUMNS, row))
-        lat = props.get("latitude_best") or props.pop("latitude")
-        lng = props.get("longitude_best") or props.pop("longitude")
+        lat = props.get("latitude_best")
+        lat = lat if lat is not None else props.get("latitude")
+        lng = props.get("longitude_best")
+        lng = lng if lng is not None else props.get("longitude")
         props.pop("latitude", None)
         props.pop("longitude", None)
         # Coerce is_superhost to a proper boolean / None

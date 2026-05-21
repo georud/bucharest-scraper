@@ -34,16 +34,18 @@ def _is_street_level(address: str | None) -> bool:
     return bool(address and _STREET_RE.search(address))
 
 
-def classify_scraped_precision(row: dict, stack_count: int) -> tuple[str, float]:
+def classify_scraped_precision(row: dict, stack_count: int, sigmas=None) -> tuple[str, float]:
     """Return (provisional_precision, sigma_m) for a listing's scraped coordinate.
 
     The sigma seeds the observation ledger; the listing's authoritative
     location_precision is decided later by fusion. `stack_count` is how many
     listings share this exact coordinate (>=3 => centroid => approximate)."""
+    s_booking = getattr(sigmas, "sigma_booking_address_m", SIGMA_BOOKING_ADDRESS)
+    s_vague = getattr(sigmas, "sigma_vague_m", SIGMA_VAGUE)
+    s_airbnb = getattr(sigmas, "sigma_airbnb_m", SIGMA_AIRBNB)
     if row["platform"] == "booking":
         address = extract_booking_address(row.get("raw_json"))
         if _is_street_level(address) and stack_count < 3:
-            return "approximate", SIGMA_BOOKING_ADDRESS
-        return "approximate", SIGMA_VAGUE
-    # Airbnb: fuzzed by policy.
-    return "approximate", SIGMA_AIRBNB
+            return "approximate", s_booking
+        return "approximate", s_vague
+    return "approximate", s_airbnb

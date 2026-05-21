@@ -46,21 +46,21 @@ def _identity_keys(row: dict) -> set[str]:
     return keys
 
 
-def _compatible(a: dict, b: dict, relaxed: bool) -> bool:
+def _compatible(a: dict, b: dict, relaxed: bool,
+                relaxed_dist: float = TIER1_RELAXED_DISTANCE_M,
+                strict_dist: float = TIER2_STRICT_DISTANCE_M,
+                strict_name: float = TIER2_NAME_THRESHOLD) -> bool:
     """Geographic + name (+ room-config) compatibility, used to guard group
-    growth. Identity keys are deliberately NOT consulted here: they are
-    operator-level (one company's phone is shared across many distinct flats),
-    so letting them override distance would merge an operator's separate units.
-    Genuine single-property identity linking is handled by the Tier-0 candidate
-    path in assign_property_groups, not here."""
+    growth. Identity keys are deliberately NOT consulted here (operator-level);
+    single-property identity linking is the Tier-0 candidate path."""
     dist = haversine_distance(a["latitude"], a["longitude"], b["latitude"], b["longitude"])
     if relaxed:
-        return dist <= TIER1_RELAXED_DISTANCE_M and (
+        return dist <= relaxed_dist and (
             _name_sim(a, b) >= TIER1_NAME_THRESHOLD or room_config_matches(a, b))
-    return dist <= TIER2_STRICT_DISTANCE_M and _name_sim(a, b) >= TIER2_NAME_THRESHOLD
+    return dist <= strict_dist and _name_sim(a, b) >= strict_name
 
 
-def assign_property_groups(rows, operator_map: dict[str, str]):
+def assign_property_groups(rows, operator_map: dict[str, str], dedup_cfg=None):
     """Group listings that are the same physical flat (within or across
     platforms). Returns (mapping, cross_platform_groups, identity_groups):
       mapping: {listing_id: group_id} for listings in a multi-member group
@@ -76,6 +76,13 @@ def assign_property_groups(rows, operator_map: dict[str, str]):
     Greedy with a clique-compatibility check so groups can't chain distant flats.
     """
     by_id = {r["id"]: r for r in rows}
+
+    relaxed_dist = getattr(dedup_cfg, "operator_relaxed_distance_m", TIER1_RELAXED_DISTANCE_M)
+    strict_dist = getattr(dedup_cfg, "strict_distance_m", TIER2_STRICT_DISTANCE_M)
+    strict_name = getattr(dedup_cfg, "strict_name_threshold", TIER2_NAME_THRESHOLD)
+
+    def compat(x, y, relaxed):
+        return _compatible(x, y, relaxed, relaxed_dist, strict_dist, strict_name)
 
     # ---- Tier 0: singleton identity across platforms ----
     key_to_booking: dict[str, list[str]] = defaultdict(list)
@@ -98,7 +105,7 @@ def assign_property_groups(rows, operator_map: dict[str, str]):
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 a, b = by_id[members[i]], by_id[members[j]]
-                if _compatible(a, b, relaxed=True):
+                if compat(a, b, True):
                     candidates.append((1, -_name_sim(a, b) / 100.0, a["id"], b["id"]))
 
     # ---- Tier 2: spatial bucket (tightened) ----
@@ -113,7 +120,7 @@ def assign_property_groups(rows, operator_map: dict[str, str]):
                     if other_id <= r["id"]:
                         continue
                     a, b = r, by_id[other_id]
-                    if _compatible(a, b, relaxed=False):
+                    if compat(a, b, False):
                         candidates.append((2, -_name_sim(a, b) / 100.0, a["id"], b["id"]))
 
     candidates.sort()  # tier asc, then -confidence asc (best first)
@@ -136,17 +143,17 @@ def assign_property_groups(rows, operator_map: dict[str, str]):
             groups[target] = {a_id, b_id}
             of[a_id] = of[b_id] = target
         elif ga and gb is None:
-            if all(_compatible(by_id[b_id], by_id[m], relaxed) for m in groups[ga]):
+            if all(compat(by_id[b_id], by_id[m], relaxed) for m in groups[ga]):
                 groups[ga].add(b_id)
                 of[b_id] = ga
                 target = ga
         elif gb and ga is None:
-            if all(_compatible(by_id[a_id], by_id[m], relaxed) for m in groups[gb]):
+            if all(compat(by_id[a_id], by_id[m], relaxed) for m in groups[gb]):
                 groups[gb].add(a_id)
                 of[a_id] = gb
                 target = gb
         else:  # both in different groups
-            if all(_compatible(by_id[x], by_id[y], relaxed)
+            if all(compat(by_id[x], by_id[y], relaxed)
                    for x in groups[ga] for y in groups[gb]):
                 gb_ident = gb in identity_tmp
                 groups[ga] |= groups[gb]
