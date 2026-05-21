@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import glob
 import logging
 import random
 import sys
@@ -112,12 +113,12 @@ class Orchestrator:
             except Exception as e:
                 logger.error("Airbnb enrichment failed: %s — continuing to export", e)
 
-        # Step 4: Cross-platform linking — link the same physical flat across
-        # Booking + Airbnb so distinct-property counts are possible downstream.
+        # Step 4: Curation — operator linking, layered property dedup,
+        # geocoding + position fusion, and verification.
         try:
-            self._link_cross_platform()
+            self._curate_geo_and_dedup()
         except Exception as e:
-            logger.error("Cross-platform linking failed: %s — continuing to export", e)
+            logger.error("Curation failed: %s — continuing to export", e)
 
         # Step 5: Summary
         total_listings = self.db.get_listing_count()
@@ -153,19 +154,25 @@ class Orchestrator:
         progress = self.db.get_progress_summary()
         logger.info("Progress summary: %s", progress)
 
-    def _link_cross_platform(self):
-        """Assign a shared `cross_platform_group_id` to listings that are the
-        same physical property on both Booking and Airbnb (best-effort — see
-        METHODOLOGY.md). Runs as a post-processing pass over the whole DB."""
-        listings = self.db.get_all_listings_minimal()
-        if not listings:
-            return
-        mapping = self.dedup.assign_cross_platform_groups(listings)
-        if mapping:
-            updated = self.db.set_cross_platform_groups(mapping)
-            logger.info("Cross-platform linking: wrote group ids to %d listings", updated)
-        else:
-            logger.info("Cross-platform linking: no cross-platform pairs found")
+    def _curate_geo_and_dedup(self):
+        """Post-enrichment curation: operator linking, layered property dedup,
+        geocoding + position fusion, and verification. Runs over the whole DB.
+        Idempotent — safe to re-run via --curate-only."""
+        from .geo.curate import run_curation
+        from .storage.database import Database
+
+        backfill_rows = None
+        backups = sorted(glob.glob(str(self.db.db_path) + ".backup-*"))
+        if backups:
+            try:
+                backfill_rows = Database.read_historical_observations(backups[-1])
+                logger.info("Curation: loaded %d historical observations from %s",
+                            len(backfill_rows), backups[-1])
+            except Exception as e:
+                logger.warning("Curation: backfill skipped (%s)", e)
+
+        metrics = run_curation(self.db, config=self.config, backfill_rows=backfill_rows)
+        logger.info("Curation complete: %s", metrics)
 
     async def _scrape_platform_booking(
         self, cells: list[GridCell], cell_map: dict[str, GridCell], run_id: int
@@ -570,6 +577,7 @@ def main():
     sample_pct = 1.0
     platforms = None
     enrich_only = False
+    curate_only = False
 
     args = sys.argv[1:]
     for i, arg in enumerate(args):
@@ -581,6 +589,19 @@ def main():
             platforms = [Platform.AIRBNB]
         elif arg == "--enrich-only":
             enrich_only = True
+        elif arg == "--curate-only":
+            curate_only = True
+
+    if curate_only:
+        try:
+            orchestrator._curate_geo_and_dedup()
+            from .storage.exporter import export_csv, export_geojson, export_operators_csv
+            export_csv(orchestrator.db)
+            export_geojson(orchestrator.db)
+            export_operators_csv(orchestrator.db)
+        finally:
+            orchestrator.db.close()
+        return
 
     try:
         asyncio.run(orchestrator.run(platforms=platforms, sample_pct=sample_pct, enrich_only=enrich_only))

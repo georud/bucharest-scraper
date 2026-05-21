@@ -717,7 +717,7 @@ class Database:
         rows = self.conn.execute(
             """
             SELECT
-                COALESCE(business_registration_number, business_name, host_id) AS operator_key,
+                COALESCE(operator_id, business_registration_number, business_name, host_id) AS operator_key,
                 COALESCE(MAX(business_name), MAX(host_name))                   AS operator_name,
                 MAX(business_registration_number)                             AS registration_number,
                 MAX(business_trade_register_name)                             AS trade_register,
@@ -725,7 +725,7 @@ class Database:
                 COUNT(*)                                                      AS listing_count,
                 SUM(CASE WHEN business_type = 'Professional' THEN 1 ELSE 0 END) AS professional_listings
             FROM listings
-            WHERE COALESCE(business_registration_number, business_name, host_id) IS NOT NULL
+            WHERE COALESCE(operator_id, business_registration_number, business_name, host_id) IS NOT NULL
             GROUP BY operator_key
             ORDER BY listing_count DESC
             """
