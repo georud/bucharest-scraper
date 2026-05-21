@@ -41,3 +41,24 @@ business_data:
     enabled: true        # Playwright modal open — adds 3-6s per listing
     timeout_seconds: 15  # Per-listing cap for modal interaction
     concurrency: 2       # Parallel Playwright pages (keep low; browser is heavy)
+
+geocoding:
+  enabled: true
+  nominatim_url: "https://nominatim.openstreetmap.org/search"
+  user_agent: "bucharest-str-research/1.0 (mihaiurudolph@gmail.com)"
+  rate_limit_s: 1.0
+  timeout_seconds: 20
+  max_retries: 5
+
+dedup:
+  operator_relaxed_distance_m: 250
+  strict_distance_m: 100
+  strict_name_threshold: 80
+
+fusion:
+  sigma_geocoded_m: 25
+  sigma_booking_address_m: 50
+  sigma_vague_m: 150
+  sigma_airbnb_m: 100
+  disagreement_km: 1.0
+  exact_max_sigma_m: 40

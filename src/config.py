@@ -70,10 +70,40 @@ class ScrapingConfig:
 
 
 @dataclass
+class GeocodingConfig:
+    enabled: bool = True
+    nominatim_url: str = "https://nominatim.openstreetmap.org/search"
+    user_agent: str = "bucharest-str-research/1.0"
+    rate_limit_s: float = 1.0
+    timeout_seconds: int = 20
+    max_retries: int = 5
+
+
+@dataclass
+class DedupConfig:
+    operator_relaxed_distance_m: float = 250.0
+    strict_distance_m: float = 100.0
+    strict_name_threshold: float = 80.0
+
+
+@dataclass
+class FusionConfig:
+    sigma_geocoded_m: float = 25.0
+    sigma_booking_address_m: float = 50.0
+    sigma_vague_m: float = 150.0
+    sigma_airbnb_m: float = 100.0
+    disagreement_km: float = 1.0
+    exact_max_sigma_m: float = 40.0
+
+
+@dataclass
 class AppConfig:
     city: CityConfig
     scraping: ScrapingConfig
     proxy_urls: list[str]
+    geocoding: GeocodingConfig
+    dedup: DedupConfig
+    fusion: FusionConfig
 
 
 def load_config() -> AppConfig:
@@ -153,4 +183,9 @@ def load_config() -> AppConfig:
         if url:
             proxy_urls.append(url)
 
-    return AppConfig(city=city, scraping=scraping, proxy_urls=proxy_urls)
+    geocoding = GeocodingConfig(**{**GeocodingConfig().__dict__, **scraping_raw.get("geocoding", {})})
+    dedup = DedupConfig(**{**DedupConfig().__dict__, **scraping_raw.get("dedup", {})})
+    fusion = FusionConfig(**{**FusionConfig().__dict__, **scraping_raw.get("fusion", {})})
+
+    return AppConfig(city=city, scraping=scraping, proxy_urls=proxy_urls,
+                     geocoding=geocoding, dedup=dedup, fusion=fusion)
