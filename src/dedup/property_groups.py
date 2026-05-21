@@ -46,20 +46,13 @@ def _identity_keys(row: dict) -> set[str]:
     return keys
 
 
-def _compatible(a: dict, b: dict, relaxed: bool,
-                singleton_keys: frozenset[str] | None = None) -> bool:
-    """Clique-compatibility predicate used to guard group growth.
-
-    singleton_keys: identity keys that appear on exactly one listing globally —
-    only these can serve as an identity short-circuit (shared multi-property
-    operator phones/emails must not override distance checks).
-    """
-    if singleton_keys is not None:
-        shared = _identity_keys(a) & _identity_keys(b) & singleton_keys
-    else:
-        shared = _identity_keys(a) & _identity_keys(b)
-    if shared:
-        return True
+def _compatible(a: dict, b: dict, relaxed: bool) -> bool:
+    """Geographic + name (+ room-config) compatibility, used to guard group
+    growth. Identity keys are deliberately NOT consulted here: they are
+    operator-level (one company's phone is shared across many distinct flats),
+    so letting them override distance would merge an operator's separate units.
+    Genuine single-property identity linking is handled by the Tier-0 candidate
+    path in assign_property_groups, not here."""
     dist = haversine_distance(a["latitude"], a["longitude"], b["latitude"], b["longitude"])
     if relaxed:
         return dist <= TIER1_RELAXED_DISTANCE_M and (
@@ -84,15 +77,6 @@ def assign_property_groups(rows, operator_map: dict[str, str]):
     """
     by_id = {r["id"]: r for r in rows}
 
-    # Pre-compute which identity keys appear on exactly one listing globally.
-    # Only singleton keys can short-circuit the distance/name check in _compatible —
-    # a phone shared by many listings is an operator signal, not a property signal.
-    key_count: dict[str, int] = defaultdict(int)
-    for r in rows:
-        for k in _identity_keys(r):
-            key_count[k] += 1
-    singleton_keys: frozenset[str] = frozenset(k for k, c in key_count.items() if c == 1)
-
     # ---- Tier 0: singleton identity across platforms ----
     key_to_booking: dict[str, list[str]] = defaultdict(list)
     key_to_airbnb: dict[str, list[str]] = defaultdict(list)
@@ -114,7 +98,7 @@ def assign_property_groups(rows, operator_map: dict[str, str]):
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 a, b = by_id[members[i]], by_id[members[j]]
-                if _compatible(a, b, relaxed=True, singleton_keys=singleton_keys):
+                if _compatible(a, b, relaxed=True):
                     candidates.append((1, -_name_sim(a, b) / 100.0, a["id"], b["id"]))
 
     # ---- Tier 2: spatial bucket (tightened) ----
@@ -129,7 +113,7 @@ def assign_property_groups(rows, operator_map: dict[str, str]):
                     if other_id <= r["id"]:
                         continue
                     a, b = r, by_id[other_id]
-                    if _compatible(a, b, relaxed=False, singleton_keys=singleton_keys):
+                    if _compatible(a, b, relaxed=False):
                         candidates.append((2, -_name_sim(a, b) / 100.0, a["id"], b["id"]))
 
     candidates.sort()  # tier asc, then -confidence asc (best first)
@@ -152,19 +136,17 @@ def assign_property_groups(rows, operator_map: dict[str, str]):
             groups[target] = {a_id, b_id}
             of[a_id] = of[b_id] = target
         elif ga and gb is None:
-            if all(_compatible(by_id[b_id], by_id[m], relaxed,
-                               singleton_keys=singleton_keys) for m in groups[ga]):
+            if all(_compatible(by_id[b_id], by_id[m], relaxed) for m in groups[ga]):
                 groups[ga].add(b_id)
                 of[b_id] = ga
                 target = ga
         elif gb and ga is None:
-            if all(_compatible(by_id[a_id], by_id[m], relaxed,
-                               singleton_keys=singleton_keys) for m in groups[gb]):
+            if all(_compatible(by_id[a_id], by_id[m], relaxed) for m in groups[gb]):
                 groups[gb].add(a_id)
                 of[a_id] = gb
                 target = gb
         else:  # both in different groups
-            if all(_compatible(by_id[x], by_id[y], relaxed, singleton_keys=singleton_keys)
+            if all(_compatible(by_id[x], by_id[y], relaxed)
                    for x in groups[ga] for y in groups[gb]):
                 gb_ident = gb in identity_tmp
                 groups[ga] |= groups[gb]
