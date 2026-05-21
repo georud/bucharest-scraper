@@ -127,6 +127,17 @@ class Database:
             ("currency_original", "TEXT"),
             ("cross_platform_group_id", "TEXT"),
             ("first_seen_at", "TEXT"),
+            ("operator_id", "TEXT"),
+            ("property_group_id", "TEXT"),
+            ("latitude_geocoded", "REAL"),
+            ("longitude_geocoded", "REAL"),
+            ("latitude_best", "REAL"),
+            ("longitude_best", "REAL"),
+            ("geocoded_address", "TEXT"),
+            ("location_precision", "TEXT"),
+            ("location_source", "TEXT"),
+            ("est_accuracy_m", "REAL"),
+            ("position_confidence", "REAL"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing:
@@ -138,6 +149,34 @@ class Database:
         if "listings_dropped" not in run_cols:
             self.conn.execute("ALTER TABLE scrape_runs ADD COLUMN listings_dropped INTEGER DEFAULT 0")
             logger.info("Migrated: added column listings_dropped to scrape_runs")
+
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS position_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                listing_id TEXT NOT NULL,
+                property_group_id TEXT,
+                capture_date TEXT,
+                platform TEXT,
+                source TEXT,            -- 'scraped' | 'geocoded'
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                sigma_m REAL NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_obs_group ON position_observations(property_group_id);
+            CREATE INDEX IF NOT EXISTS idx_obs_listing ON position_observations(listing_id);
+
+            CREATE TABLE IF NOT EXISTS geocode_cache (
+                address_norm TEXT PRIMARY KEY,
+                status TEXT NOT NULL,          -- 'ok' | 'failed' | 'not_found'
+                latitude REAL,
+                longitude REAL,
+                quality TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_tried_at TEXT,
+                raw_json TEXT
+            );
+        """)
 
         self.conn.commit()
 
@@ -688,6 +727,127 @@ class Database:
             }
             for r in rows
         ]
+
+    # ------------------------------------------------------------------
+    # Geo / dedup curation stage
+    # ------------------------------------------------------------------
+
+    _CURATION_COLS = (
+        "id", "platform", "name", "latitude", "longitude",
+        "bedrooms", "beds", "bathrooms", "business_type",
+        "business_registration_number", "business_phone", "business_email",
+        "host_name", "host_id", "raw_json", "scraped_at",
+    )
+
+    def get_listings_for_curation(self) -> list[dict]:
+        """Lightweight dict reader for the curation stage (identity + room +
+        coords + raw_json). Only rows with valid coordinates."""
+        cols = ", ".join(self._CURATION_COLS)
+        rows = self.conn.execute(
+            f"SELECT {cols} FROM listings "
+            "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+        ).fetchall()
+        return [dict(zip(self._CURATION_COLS, r)) for r in rows]
+
+    def set_operator_ids(self, mapping: dict[str, str]) -> int:
+        if not mapping:
+            return 0
+        self.conn.executemany(
+            "UPDATE listings SET operator_id=? WHERE id=?",
+            [(op, lid) for lid, op in mapping.items()],
+        )
+        self.conn.commit()
+        return len(mapping)
+
+    def set_property_groups(self, mapping: dict[str, str],
+                            cross_platform: set[str]) -> int:
+        """Write property_group_id; set cross_platform_group_id to the group id
+        only for groups in `cross_platform` (those spanning both platforms)."""
+        if not mapping:
+            return 0
+        rows = []
+        for lid, gid in mapping.items():
+            rows.append((gid, gid if gid in cross_platform else None, lid))
+        self.conn.executemany(
+            "UPDATE listings SET property_group_id=?, cross_platform_group_id=? WHERE id=?",
+            rows,
+        )
+        self.conn.commit()
+        return len(mapping)
+
+    def clear_position_observations(self) -> None:
+        self.conn.execute("DELETE FROM position_observations")
+        self.conn.commit()
+
+    def add_position_observations(self, observations: list[tuple]) -> int:
+        """observations: list of (listing_id, property_group_id, capture_date,
+        platform, source, latitude, longitude, sigma_m)."""
+        if not observations:
+            return 0
+        now = datetime.utcnow().isoformat()
+        self.conn.executemany(
+            """INSERT INTO position_observations
+               (listing_id, property_group_id, capture_date, platform, source,
+                latitude, longitude, sigma_m, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [obs + (now,) for obs in observations],
+        )
+        self.conn.commit()
+        return len(observations)
+
+    def set_geocoded(self, mapping: dict[str, tuple]) -> int:
+        """mapping: {listing_id: (lat, lng, geocoded_address)}."""
+        if not mapping:
+            return 0
+        self.conn.executemany(
+            "UPDATE listings SET latitude_geocoded=?, longitude_geocoded=?, geocoded_address=? WHERE id=?",
+            [(v[0], v[1], v[2], lid) for lid, v in mapping.items()],
+        )
+        self.conn.commit()
+        return len(mapping)
+
+    def set_fused_positions(self, mapping: dict[str, dict]) -> int:
+        """mapping: {listing_id: {lat_best, lng_best, est_accuracy_m,
+        position_confidence, location_source, location_precision}}."""
+        if not mapping:
+            return 0
+        rows = [
+            (v["lat_best"], v["lng_best"], v["est_accuracy_m"],
+             v["position_confidence"], v["location_source"], v["location_precision"], lid)
+            for lid, v in mapping.items()
+        ]
+        self.conn.executemany(
+            """UPDATE listings SET latitude_best=?, longitude_best=?, est_accuracy_m=?,
+               position_confidence=?, location_source=?, location_precision=? WHERE id=?""",
+            rows,
+        )
+        self.conn.commit()
+        return len(mapping)
+
+    def get_geocode(self, address_norm: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT address_norm, status, latitude, longitude, quality, attempts, last_tried_at "
+            "FROM geocode_cache WHERE address_norm=?", (address_norm,)
+        ).fetchone()
+        if not row:
+            return None
+        return dict(zip(
+            ("address_norm", "status", "latitude", "longitude", "quality", "attempts", "last_tried_at"), row))
+
+    def upsert_geocode(self, address_norm: str, status: str, latitude: float | None,
+                       longitude: float | None, quality: str | None, attempts: int) -> None:
+        self.conn.execute(
+            """INSERT INTO geocode_cache
+               (address_norm, status, latitude, longitude, quality, attempts, last_tried_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(address_norm) DO UPDATE SET
+                 status=excluded.status, latitude=excluded.latitude,
+                 longitude=excluded.longitude, quality=excluded.quality,
+                 attempts=excluded.attempts, last_tried_at=excluded.last_tried_at""",
+            (address_norm, status, latitude, longitude, quality, attempts,
+             datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
 
     def close(self):
         self.conn.close()
