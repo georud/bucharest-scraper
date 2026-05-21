@@ -96,33 +96,8 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
     db.replace_position_observations(observations)
     db.set_geocoded(geocoded_map)
 
-    # 4. Fuse each group; every member of a group gets the same best position.
-    members_by_key: dict[str, list[str]] = defaultdict(list)
-    for r in rows:
-        members_by_key[group_key(r["id"])].append(r["id"])
-
-    fused_map: dict[str, dict] = {}
-    exact_max = getattr(getattr(config, "fusion", None), "exact_max_sigma_m", 40.0)
-    for gk, obs in fuse_inputs.items():
-        fused = fuse_observations(obs)
-        for lid in members_by_key.get(gk, []):
-            if fused.dominant_listing_id != lid:
-                source = "transferred_from_twin"
-            elif fused.dominant_source == "geocoded":
-                source = "geocoded_address"
-            else:
-                source = "platform_coord"
-            fused_map[lid] = {
-                "lat_best": fused.latitude, "lng_best": fused.longitude,
-                "est_accuracy_m": round(fused.sigma_m, 1),
-                "position_confidence": round(position_confidence(fused.sigma_m), 3),
-                "location_source": source,
-                "location_precision": "exact" if fused.sigma_m <= exact_max else "approximate",
-            }
-    db.set_fused_positions(fused_map)
-
-    # Flag cross-platform groups whose Booking vs Airbnb observations disagree
-    # by more than the configured distance — a probable false-positive link.
+    # 4a. Detect cross-platform groups whose Booking vs Airbnb observations
+    #     disagree by more than the configured distance — a probable false link.
     disagreement_m = getattr(fusion_cfg, "disagreement_km", 1.0) * 1000.0
     geo_conflicts: list[str] = []
     for gk, obs in fuse_inputs.items():
@@ -134,9 +109,48 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
             maxd = max(haversine_distance(b[0], b[1], a[0], a[1]) for b in bk for a in ab)
             if maxd > disagreement_m:
                 geo_conflicts.append(gk)
+    geo_conflict_set = set(geo_conflicts)
     if geo_conflicts:
-        logger.warning("Curation: %d cross-platform groups disagree >%.0fm on position",
+        logger.warning("Curation: %d cross-platform groups disagree >%.0fm — fusing them per-listing (no transfer)",
                        len(geo_conflicts), disagreement_m)
+
+    # 4b. Fuse. Normal groups: all members share the group-fused position.
+    #     Flagged (disagreeing) groups: fuse each member from ONLY its own
+    #     observations, so a wrong cross-platform link can't drag a position.
+    members_by_key: dict[str, list[str]] = defaultdict(list)
+    for r in rows:
+        members_by_key[group_key(r["id"])].append(r["id"])
+
+    fused_map: dict[str, dict] = {}
+    exact_max = getattr(fusion_cfg, "exact_max_sigma_m", 40.0)
+
+    def _record(lid: str, fused, transferred: bool) -> None:
+        if transferred:
+            source = "transferred_from_twin"
+        elif fused.dominant_source == "geocoded":
+            source = "geocoded_address"
+        else:
+            source = "platform_coord"
+        fused_map[lid] = {
+            "lat_best": fused.latitude, "lng_best": fused.longitude,
+            "est_accuracy_m": round(fused.sigma_m, 1),
+            "position_confidence": round(position_confidence(fused.sigma_m), 3),
+            "location_source": source,
+            "location_precision": "exact" if fused.sigma_m <= exact_max else "approximate",
+        }
+
+    for gk, obs in fuse_inputs.items():
+        members = members_by_key.get(gk, [])
+        if gk in geo_conflict_set:
+            for lid in members:
+                own = [o for o in obs if o.listing_id == lid]
+                if own:
+                    _record(lid, fuse_observations(own), transferred=False)
+        else:
+            fused = fuse_observations(obs)
+            for lid in members:
+                _record(lid, fused, transferred=(fused.dominant_listing_id != lid))
+    db.set_fused_positions(fused_map)
 
     # 5. Verification (exclude identity/operator-derived groups to avoid circularity)
     metrics = dedup_metrics(rows, group_map, identity_groups)

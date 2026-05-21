@@ -38,10 +38,13 @@ def test_run_curation_links_twin_and_improves_airbnb_position(db):
 
 
 def test_run_curation_flags_cross_platform_disagreement(db):
-    # Same unique phone (Tier-0 link) but ~8 km apart -> linked yet flagged.
+    # Same unique phone (Tier-0 link) but ~8 km apart -> linked, flagged, and NOT position-transferred.
     _mk(db, "booking_1", Platform.BOOKING, "Flat", 44.4300, 26.1000, business_phone="0722000222")
     _mk(db, "airbnb_2", Platform.AIRBNB, "Flat", 44.5000, 26.1000, business_phone="+40722000222")
     metrics = run_curation(db, fetch_fn=lambda q: [])
-    gid = db.conn.execute("SELECT property_group_id FROM listings WHERE id='booking_1'").fetchone()[0]
-    assert gid is not None
-    assert gid in metrics["geo_conflict_groups"]
+    row = dict(zip(("gid","lat_best","src"), db.conn.execute(
+        "SELECT property_group_id, latitude_best, location_source FROM listings WHERE id='airbnb_2'").fetchone()))
+    assert row["gid"] is not None
+    assert row["gid"] in metrics["geo_conflict_groups"]          # flagged
+    assert row["lat_best"] > 44.45                                # kept its OWN ~44.50 position, NOT pulled to booking's 44.43
+    assert row["src"] == "platform_coord"                         # not transferred_from_twin
