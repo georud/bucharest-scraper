@@ -159,7 +159,6 @@ class Orchestrator:
         geocoding + position fusion, and verification. Runs over the whole DB.
         Idempotent — safe to re-run via --curate-only."""
         from .geo.curate import run_curation
-        from .storage.database import Database
 
         backfill_rows = None
         backups = sorted(glob.glob(str(self.db.db_path) + ".backup-*"))
@@ -595,10 +594,10 @@ def main():
     if curate_only:
         try:
             orchestrator._curate_geo_and_dedup()
-            from .storage.exporter import export_csv, export_geojson, export_operators_csv
             export_csv(orchestrator.db)
             export_geojson(orchestrator.db)
             export_operators_csv(orchestrator.db)
+            build_map(orchestrator.db)
         finally:
             orchestrator.db.close()
         return
