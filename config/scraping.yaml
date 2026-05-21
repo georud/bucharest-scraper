@@ -49,6 +49,7 @@ geocoding:
   rate_limit_s: 1.0
   timeout_seconds: 20
   max_retries: 5
+  max_geocode_drift_km: 2.0
 
 dedup:
   operator_relaxed_distance_m: 250

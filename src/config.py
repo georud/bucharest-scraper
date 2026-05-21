@@ -77,6 +77,7 @@ class GeocodingConfig:
     rate_limit_s: float = 1.0
     timeout_seconds: int = 20
     max_retries: int = 5
+    max_geocode_drift_km: float = 2.0
 
 
 @dataclass

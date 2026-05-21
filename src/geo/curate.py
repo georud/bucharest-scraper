@@ -56,12 +56,14 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
         timeout=getattr(geocfg, "timeout_seconds", 20),
         max_retries=getattr(geocfg, "max_retries", 5),
     ) if (geocfg is None or geocfg.enabled) else None
+    max_drift_m = getattr(geocfg, "max_geocode_drift_km", 2.0) * 1000.0
 
     stack = Counter((round(r["latitude"], 6), round(r["longitude"], 6)) for r in rows)
 
     observations: list[tuple] = []
     fuse_inputs: dict[str, list[Observation]] = defaultdict(list)
     geocoded_map: dict[str, tuple] = {}
+    geocode_discarded = 0
 
     def group_key(lid: str) -> str:
         return group_map.get(lid, lid)  # singletons fuse on their own id
@@ -81,10 +83,18 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
             if address:
                 hit = geocoder.geocode(address)
                 if hit:
-                    geocoded_map[lid] = (hit[0], hit[1], address)
-                    observations.append((lid, group_map.get(lid), cap_date, r["platform"],
-                                        "geocoded", hit[0], hit[1], geo_sigma))
-                    fuse_inputs[gk].append(Observation(lid, hit[0], hit[1], geo_sigma, "geocoded"))
+                    drift = haversine_distance(r["latitude"], r["longitude"], hit[0], hit[1])
+                    if drift <= max_drift_m:
+                        geocoded_map[lid] = (hit[0], hit[1], address)
+                        observations.append((lid, group_map.get(lid), cap_date, r["platform"],
+                                            "geocoded", hit[0], hit[1], geo_sigma))
+                        fuse_inputs[gk].append(Observation(lid, hit[0], hit[1], geo_sigma, "geocoded"))
+                    else:
+                        geocode_discarded += 1
+
+    if geocode_discarded:
+        logger.warning("Curation: discarded %d geocodes farther than %.0fm from the scraped point",
+                       geocode_discarded, max_drift_m)
 
     # 3b. Temporal backfill (historical observations from a prior capture).
     for (lid, lat, lng, sigma_m, cap_date, platform) in (backfill_rows or []):
