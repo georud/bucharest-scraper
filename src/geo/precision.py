@@ -16,12 +16,19 @@ _STREET_RE = re.compile(
 
 
 def extract_booking_address(raw_json: str | None) -> str | None:
-    """Pull 'address, city' from a Booking raw_json location block."""
+    """Pull 'address, city' from a Booking raw_json location block. The real
+    payload nests it under basicPropertyData.location; older/synthetic payloads
+    may put it at the top level, so try both."""
     if not raw_json:
         return None
     try:
-        loc = (json.loads(raw_json) or {}).get("location") or {}
-    except (ValueError, AttributeError):
+        obj = json.loads(raw_json) or {}
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    loc = (obj.get("basicPropertyData") or {}).get("location") or obj.get("location") or {}
+    if not isinstance(loc, dict):
         return None
     address = (loc.get("address") or "").strip()
     if not address:
