@@ -261,7 +261,12 @@ class Database:
             business_address = COALESCE(business_address, ?),
             business_email = COALESCE(business_email, ?),
             business_phone = COALESCE(business_phone, ?),
-            business_type = COALESCE(business_type, ?),
+            -- Allow a real classification (Professional/Individual/Private) to
+            -- overwrite a placeholder 'Unknown'/NULL. NULLIF maps incoming
+            -- 'Unknown' to NULL so it can't downgrade a real existing label;
+            -- the trailing ? is the final fallback so 'Unknown' can still be
+            -- written when both existing and the cleaned incoming are NULL.
+            business_type = COALESCE(NULLIF(?, 'Unknown'), business_type, ?),
             business_country = COALESCE(business_country, ?),
             business_trade_register_name = COALESCE(business_trade_register_name, ?),
             host_name = COALESCE(host_name, ?),
@@ -290,7 +295,8 @@ class Database:
                 lst.business_address,
                 lst.business_email,
                 lst.business_phone,
-                lst.business_type,
+                lst.business_type,                 # for NULLIF(?, 'Unknown')
+                lst.business_type,                 # fallback if both ends NULL
                 lst.business_country,
                 lst.business_trade_register_name,
                 lst.host_name,
