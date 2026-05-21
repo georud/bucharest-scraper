@@ -173,8 +173,7 @@ class Database:
                 longitude REAL,
                 quality TEXT,
                 attempts INTEGER NOT NULL DEFAULT 0,
-                last_tried_at TEXT,
-                raw_json TEXT
+                last_tried_at TEXT
             );
         """)
 
@@ -762,7 +761,10 @@ class Database:
     def set_property_groups(self, mapping: dict[str, str],
                             cross_platform: set[str]) -> int:
         """Write property_group_id; set cross_platform_group_id to the group id
-        only for groups in `cross_platform` (those spanning both platforms)."""
+        only for groups in `cross_platform` (those spanning both platforms).
+        The curation stage is authoritative for property_group_id /
+        cross_platform_group_id and resets these columns before calling this;
+        listings not in `mapping` are left untouched."""
         if not mapping:
             return 0
         rows = []
@@ -775,9 +777,25 @@ class Database:
         self.conn.commit()
         return len(mapping)
 
-    def clear_position_observations(self) -> None:
+    def replace_position_observations(self, observations: list[tuple]) -> int:
+        """Atomically clear the ledger and insert new observations in one transaction.
+
+        Each tuple is (listing_id, property_group_id, capture_date, platform, source,
+        latitude, longitude, sigma_m). Returns the number of rows inserted.
+        If `observations` is empty, still clears the table and returns 0.
+        """
+        now = datetime.utcnow().isoformat()
         self.conn.execute("DELETE FROM position_observations")
+        if observations:
+            self.conn.executemany(
+                """INSERT INTO position_observations
+                   (listing_id, property_group_id, capture_date, platform, source,
+                    latitude, longitude, sigma_m, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [obs + (now,) for obs in observations],
+            )
         self.conn.commit()
+        return len(observations)
 
     def add_position_observations(self, observations: list[tuple]) -> int:
         """observations: list of (listing_id, property_group_id, capture_date,
