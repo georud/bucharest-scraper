@@ -49,9 +49,10 @@ operator layer ─▶ property dedup ─▶ precision tag ─▶ geocode + ledge
 
 New `assign_property_groups(listings, operator_map) -> dict[listing_id, group_id]` replacing the call site of `assign_cross_platform_groups` (keep the old method for now, mark superseded):
 
-- **Candidate generation, two sources merged:**
-  - *Within a shared `operator_id` block:* relaxed GPS ≤ 250 m **and** (name ≥ 70% **or** room-config agreement) — the small candidate pool lets us pin the unit.
-  - *Outside operator blocks (current spatial bucket):* tightened — GPS < 100 m **and** name ≥ 80% (up from 72), room-config as tiebreak.
+- **Candidate generation, three tiers by confidence:**
+  - *Tier 0 — singleton identity (highest confidence):* when a normalized identity key (phone / email / registration) maps to **exactly one** Booking listing **and exactly one** Airbnb listing, link that pair directly — a single-property host on both platforms — **without** requiring GPS or name agreement (subject only to the > 1 km disagreement sanity flag, §5). This catches twins that proximity + name miss: Airbnb fuzzed beyond 100 m, or differently-worded titles. (Booking has no `host_name`, so the cross-platform singleton runs on phone/email/registration; `host_name` only corroborates *within* Airbnb, where a single-property host's name disambiguates re-lists.)
+  - *Tier 1 — within a shared `operator_id` block (multi-property):* relaxed GPS ≤ 250 m **and** (name ≥ 70% **or** room-config agreement) — the small candidate pool lets us pin the specific unit.
+  - *Tier 2 — outside operator blocks (current spatial bucket):* tightened — GPS < 100 m **and** name ≥ 80% (up from 72), room-config as tiebreak.
 - **Room-config helper** `room_config_matches(a, b)`: compare `bedrooms`/`beds`/`bathrooms`, treating `None` as wildcard; agreement = all present fields equal.
 - **Greedy + clique check:** sort candidates by a composite confidence (identity-shared > name_sim > inverse-distance); accept a pair/member only if it matches **every** existing member of the target group. This structurally prevents the transitive over-merge that union-find on GPS+name produced.
 - Covers **within-platform and cross-platform** dupes ("among or across").
@@ -91,7 +92,7 @@ New `assign_property_groups(listings, operator_map) -> dict[listing_id, group_id
 
 ### 6. Verification — `src/dedup/validate.py` (new) + review exports
 
-- **Auto metric** (identity keys as ground truth): for property groups whose members carry identity keys on ≥ 2 sides, report **precision proxy** (groups whose identities agree ÷ groups with comparable identities), **recall proxy** (identity-confirmed co-located twins we grouped ÷ all such candidates), and a **conflict list** (grouped members whose identities disagree — false-positive suspects, union of §5's distance flags). Printed to the run log + `data/exports/dedup_metrics.json`.
+- **Auto metric** (identity keys as ground truth): computed only on **Tier 1–2** pairs (matched by proximity/name), using identity-key agreement as an *independent* check — **precision proxy** (groups whose identities agree ÷ groups with comparable identities) and **recall proxy** (identity-confirmed co-located twins we grouped ÷ all such candidates), plus a **conflict list** (grouped members whose identities disagree — false-positive suspects, union of §5's distance flags). Tier-0 (identity) matches are **excluded** from the precision proxy to avoid circularity, and instead spot-checked via the sample export. Printed to the run log + `data/exports/dedup_metrics.json`.
 - **Sample export** `data/exports/dedup_review.csv`: N matched pairs + N near-misses with names, addresses, both coordinates, distance, identity keys, photo URLs — for eyeballing and threshold tuning.
 - **Reverse-geocode QA** `data/exports/geo_review.csv`: reverse-geocode each fused best point, compare its city/sector to the scraped Booking address; list mismatches.
 
@@ -167,6 +168,14 @@ fusion:
 - **Unit:** `normalize_*`; `room_config_matches`; fusion math (inverse-variance correctness on hand-computed cases, outlier rejection, two-approximate-points variance drop, N-sample √N shrink); precision classification on Booking-detailed / Booking-vague / Airbnb fixtures.
 - **Integration:** run the stage on a small fixture DB; assert operator grouping merges the STR/STRE example, property groups stay 1:1 where expected, and best coords move toward the geocoded point.
 - **Acceptance on the real DB:** `--curate-only` run; `dedup_metrics.json` precision proxy ≥ ~0.95 with no high-distance conflicts unexplained; spot-check `dedup_review.csv`; confirm ~4,700 Booking addresses geocoded (cached) and Airbnb twins inherit tightened positions.
+
+## Rollout sequence (incl. rescrape)
+
+1. **Implement** the stage and migrate the schema (idempotent, safe on the live DB).
+2. **Curate the existing data first** — run `--curate-only` on the current `data/bucharest.db`: geocode the ~4,700 Booking addresses (cached), build the ledger with the **April backfill**, fuse, and run verification. Review `dedup_metrics.json` + `dedup_review.csv` + `geo_review.csv` and tune the σ/threshold config. This validates the logic against known data before any new scrape.
+3. **Back up** the curated DB (timestamped copy, as before).
+4. **Full fresh rescrape** with the new stage wired inline, so precision/dedup/geo run on freshly scraped listings end-to-end. This also adds a **third capture** to the ledger — temporal fusion tightens every Airbnb position another ≈ ÷√N — and refreshes the ~10 %/month churn.
+5. Compare the post-rescrape DB to the curated pre-rescrape DB (extend `CAPTURE_COMPARISON.md`), confirming positions improved and dedup/operator counts are stable.
 
 ## Risks / caveats
 
