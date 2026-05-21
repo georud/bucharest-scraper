@@ -32,3 +32,13 @@ def test_geojson_uses_best_coords_when_present(db, tmp_path):
     path = export_geojson(db, output_path=tmp_path / "l.geojson")
     feat = json.load(open(path, encoding="utf-8"))["features"][0]
     assert feat["geometry"]["coordinates"] == [26.1001, 44.4301]
+
+
+from src.storage.exporter import export_dedup_metrics
+
+
+def test_export_dedup_metrics_writes_json(db, tmp_path):
+    path = export_dedup_metrics({"precision_proxy": 0.97, "conflict_groups": []},
+                                output_path=tmp_path / "m.json")
+    import json
+    assert json.load(open(path))["precision_proxy"] == 0.97

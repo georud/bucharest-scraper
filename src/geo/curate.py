@@ -121,4 +121,10 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
     # 5. Verification (exclude identity/operator-derived groups to avoid circularity)
     metrics = dedup_metrics(rows, group_map, identity_groups)
     logger.info("Curation metrics: %s", metrics)
+    try:
+        from ..storage.exporter import export_dedup_metrics, export_dedup_review
+        export_dedup_metrics(metrics)
+        export_dedup_review(db)
+    except Exception as e:
+        logger.warning("Curation: review export failed (%s)", e)
     return metrics

@@ -118,3 +118,35 @@ def export_operators_csv(db: Database, output_path: Path | None = None) -> Path:
 
     logger.info("Exported %d operators to %s", len(operators), path)
     return path
+
+
+def export_dedup_metrics(metrics: dict, output_path: Path | None = None) -> Path:
+    """Write the dedup verification metrics to JSON."""
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = output_path or EXPORTS_DIR / "dedup_metrics.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(metrics, f, ensure_ascii=False, indent=2)
+    logger.info("Exported dedup metrics to %s", path)
+    return path
+
+
+def export_dedup_review(db: Database, output_path: Path | None = None, sample: int = 200) -> Path:
+    """Export a reviewable sample of property groups: members, names, coords,
+    distance, identity keys, photo URLs — for eyeballing dedup quality."""
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = output_path or EXPORTS_DIR / "dedup_review.csv"
+    rows = db.conn.execute(
+        """SELECT property_group_id, id, platform, name, latitude, longitude,
+                  latitude_best, longitude_best, business_registration_number,
+                  business_phone, thumbnail_url
+           FROM listings WHERE property_group_id IS NOT NULL
+           ORDER BY property_group_id LIMIT ?""", (sample * 2,)
+    ).fetchall()
+    header = ["property_group_id", "id", "platform", "name", "latitude", "longitude",
+              "latitude_best", "longitude_best", "registration", "phone", "thumbnail_url"]
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
+    logger.info("Exported dedup review sample to %s", path)
+    return path
