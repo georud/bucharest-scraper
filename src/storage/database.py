@@ -673,6 +673,22 @@ class Database:
         self.conn.commit()
         return len(rows)
 
+    @staticmethod
+    def read_historical_observations(db_path, platform_sigma=None) -> list[tuple]:
+        """Read (listing_id, lat, lng, sigma_m, capture_date, platform) from a
+        prior DB file for temporal fusion. sigma defaults: booking 60, airbnb 100."""
+        import sqlite3 as _sq
+        sigma = platform_sigma or {"booking": 60.0, "airbnb": 100.0}
+        conn = _sq.connect(str(db_path))
+        try:
+            rows = conn.execute(
+                "SELECT id, latitude, longitude, platform, scraped_at FROM listings "
+                "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+            ).fetchall()
+        finally:
+            conn.close()
+        return [(r[0], r[1], r[2], sigma.get(r[3], 100.0), (r[4] or "")[:10], r[3]) for r in rows]
+
     def get_all_listings_minimal(self) -> list[Listing]:
         """Return every listing with the fields the deduplicator needs.
 

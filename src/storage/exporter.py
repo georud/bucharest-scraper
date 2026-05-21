@@ -25,6 +25,11 @@ _EXPORT_COLUMNS = [
     "first_seen_at", "price_original", "currency_original",
     # Cross-platform linkage (same physical flat on Booking + Airbnb)
     "cross_platform_group_id",
+    # Geo curation (precision + fused position)
+    "operator_id", "property_group_id",
+    "latitude_geocoded", "longitude_geocoded",
+    "latitude_best", "longitude_best", "geocoded_address",
+    "location_precision", "location_source", "est_accuracy_m", "position_confidence",
     # Business / DSA disclosure
     "business_name", "business_registration_number", "business_vat",
     "business_address", "business_email", "business_phone",
@@ -68,8 +73,10 @@ def export_geojson(db: Database, output_path: Path | None = None) -> Path:
     features = []
     for row in rows:
         props = dict(zip(_EXPORT_COLUMNS, row))
-        lat = props.pop("latitude")
-        lng = props.pop("longitude")
+        lat = props.get("latitude_best") or props.pop("latitude")
+        lng = props.get("longitude_best") or props.pop("longitude")
+        props.pop("latitude", None)
+        props.pop("longitude", None)
         # Coerce is_superhost to a proper boolean / None
         sh = props.get("is_superhost")
         if sh is not None:
