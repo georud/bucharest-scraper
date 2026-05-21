@@ -14,11 +14,17 @@ _STREET_RE = re.compile(
     re.IGNORECASE,
 )
 
+_GEOCODE_NOISE = re.compile(
+    r"\b(?:bloc|bl|scara|sc|etaj|et|apartament|apart|ap|corp|floor|apartment|room)\b",
+    re.IGNORECASE,
+)
+
 
 def extract_booking_address(raw_json: str | None) -> str | None:
-    """Pull 'address, city' from a Booking raw_json location block. The real
-    payload nests it under basicPropertyData.location; older/synthetic payloads
-    may put it at the top level, so try both."""
+    """Return a geocodable 'street+number, city' from a Booking raw_json
+    location block (basicPropertyData.location, fallback top-level location).
+    Apartment-level detail (bloc/scara/etaj/apartament/...) is stripped so
+    Nominatim can resolve the street; returns None if no address."""
     if not raw_json:
         return None
     try:
@@ -31,6 +37,9 @@ def extract_booking_address(raw_json: str | None) -> str | None:
     if not isinstance(loc, dict):
         return None
     address = (loc.get("address") or "").strip()
+    if not address:
+        return None
+    address = _GEOCODE_NOISE.split(address, maxsplit=1)[0].strip(" ,.")
     if not address:
         return None
     city = (loc.get("city") or "").strip()
