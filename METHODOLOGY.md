@@ -167,7 +167,7 @@ bounding box*, but two honest caveats apply:
 | Business-type classified | 4,796 / 4,796 (100%) | 6,076 / 6,105 (99.5%) |
 | Full company disclosure captured | 1,932 | 2,547 |
 
-Booking's 31% price gap is real, not a bug: those listings have **no bookable
+Booking's ~one-third price gap is real, not a bug: those listings have **no bookable
 night** across any of the 25 tested date windows (booked solid, minimum-stay
 rules, seasonal closure). 29 Airbnb listings never rendered their page state
 even after retries and stayed `Unknown`.
@@ -401,18 +401,16 @@ identity.
 
 **Reasonable claims** (with the right hedging):
 
-- ✅ "At least **4,546 listings** in Bucharest across Booking and Airbnb are
+- ✅ "Around **4,500 listings** in Bucharest across Booking and Airbnb are
   operated by parties the platforms classify as professional businesses." —
-  it's a floor; classification has residual error (§13) and unclassified rows
-  exist.
-- ✅ "Of the ~9,363 distinct properties identified, a substantial share are run
-  by professional operators rather than individual hosts." — "~" and
-  "identified" are doing real work; see §6, §7.
-- ✅ "One operator, STR Asset Management, is attached to ~200 listings." — round
-  it, say "around", and verify the company independently (§9).
+  classification has residual error (§13) and unclassified rows exist.
+- ✅ "Of the **~8,100 distinct properties** identified, a substantial share are
+  run by professional operators rather than individual hosts." — "~" and
+  "identified" are doing real work, and the estimate is method-dependent (§6, §7).
+- ✅ "One operator, STRE Asset Management, is attached to around 300 listings." —
+  round it, say "around", and verify the company independently (§9).
 - ✅ "Professional operators with 10+ listings number in the low hundreds." —
-  121 by the raw key, slightly fewer after de-duplicating registration-number
-  variants.
+  ~100 by the normalised operator key (§6).
 
 **Claims to avoid:**
 
@@ -424,7 +422,7 @@ identity.
 - ❌ "This flat is at [exact address/point]." — Airbnb coordinates are fuzzed by
   ~150 m (§8).
 - ❌ "Average nightly price in Bucharest is €X." — prices are arbitrary-date
-  snapshots, 31% of Booking listings have none, and the set is not a
+  snapshots, ~a third of Booking listings have none, and the set is not a
   probability sample (§5, §10).
 - ❌ Treating `business_address` as the property's location (§8).
 
