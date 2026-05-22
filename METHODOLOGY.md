@@ -296,10 +296,12 @@ overwritten). It works as follows:
    `approximate`) and `location_source` (`geocoded_address` /
    `transferred_from_twin` / `platform_coord`).
 
-**Result (May 2026 capture):** of 10,982 listings, **6,540 (60%) are `exact`**
-(median accuracy ~30 m; ~3,400 from geocoded Booking addresses, 2,900 Airbnb
+**Result (May 2026 capture):** of 10,982 listings, **6,635 (60%) are `exact`**
+(median accuracy ~24 m; ~3,900 from geocoded Booking addresses, 2,914 Airbnb
 de-fuzzed via a twin); the remaining ~40% stay `approximate` (Airbnb with no
 twin, or un-geocodable Booking). Map/exports use `latitude_best`/`longitude_best`.
+Address cleaning resolves ~78% of Booking addresses; a `--regeocode` run re-tries
+cached failures after cleaning improvements.
 
 **How to use it:**
 - **Map / cite a point only where `location_precision = 'exact'`** (optionally
@@ -456,7 +458,8 @@ rendered the signal — Airbnb anti-bot blocking, **not** a synonym for
 
 - **Denominator unknown** — cannot prove the dataset is every Bucharest listing (§5).
 - **Price gaps** — ~35% of Booking listings have no price; genuinely unbookable on tested dates (§5, §10).
-- **Coordinates** — as-scraped points are imprecise (Airbnb ~150 m fuzz). The curation stage lifts ~60% to `exact` (~30 m median) via geocoding + cross-platform/temporal fusion, but ~40% stay `approximate`; map only `exact` rows (§8).
+- **Coordinates** — as-scraped points are imprecise (Airbnb ~150 m fuzz). The curation stage lifts ~60% to `exact` (~24 m median) via geocoding + cross-platform/temporal fusion, but ~40% stay `approximate`; map only `exact` rows (§8).
+- **Some gaps are genuinely unrecoverable, not extraction misses** — re-fetching already-enriched listings yields ~nothing: Airbnb partial-room counts (~354 missing bathrooms) and host stats (`host_response_rate` ~657, `host_join_date` ~885) simply aren't on those pages; Booking `max_guests`/`business_vat` are never exposed. Don't re-scrape to chase them.
 - **Dedup is an estimate, bracketed both ways** — the layered method merges more aggressively than the old strict-1:1 (~8,000 vs ~9,400 distinct properties); Tier-1 can over-merge an operator's similar nearby units, Airbnb fuzz can miss twins (§7).
 - **Business data is unverified** — not checked against ONRC/VIES (§9).
 - **Operator linking** — normalised via identity union-find, but the same operator can still split across platforms when Booking and Airbnb disclose different ID formats (CUI vs J-number) (§6).

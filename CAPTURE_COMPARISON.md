@@ -227,10 +227,12 @@ positions** for a majority of listings.
 | host_name | 6,076 | 6,198 | **6,183** |
 
 **New — position precision (the headline addition):**
-- **6,540 of 10,982 listings (60%) are now `exact`**, median accuracy **~30 m**
+- **6,635 of 10,982 listings (60%) are now `exact`**, median accuracy **~24 m**
   (vs the ~150 m Airbnb fuzz / mixed Booking before). All listings carry a fused
-  `latitude_best`/`longitude_best`.
-- **~3,400** positions from geocoded Booking street addresses; **2,900** Airbnb
+  `latitude_best`/`longitude_best`. (A geocode-recovery pass with improved address
+  cleaning re-resolved ~630 previously-failed addresses, cutting Booking listings
+  still on a raw coordinate from 995 to 791.)
+- **~3,900** positions from geocoded Booking street addresses; **2,914** Airbnb
   listings de-fuzzed by transferring their matched Booking twin's position.
 - Positions are clean — max best-vs-scraped shift **< 2 km** (a geocode-drift
   guard discards mis-resolutions > 2 km; ~86 discarded). 28 cross-platform groups
