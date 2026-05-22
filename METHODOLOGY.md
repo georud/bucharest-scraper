@@ -4,8 +4,9 @@ A guide for anyone analysing or publishing from this dataset. It explains where
 the data comes from, how it was collected, how complete it is, what each field
 means, and — most importantly — **what you can and cannot safely claim from it**.
 
-Figures below are from the **April 2026 capture** of Bucharest. They are a
-snapshot; re-running the scraper produces a fresh one.
+The scale tables in §1 and §5 are the **April 2026 baseline**; the later sections
+(positions §8, dedup/operators §6–§7) cite the **current May 2026 capture**. Both
+are dated snapshots — re-running the scraper produces a fresh one.
 
 ---
 
@@ -22,6 +23,18 @@ platforms surface this as a per-listing business panel (company legal name,
 registration number, registered address, contact details). This project
 aggregates those per-listing public disclosures into one queryable dataset so
 the professional-operator layer of the short-term rental market becomes visible.
+
+Beyond the trader disclosure, a curation stage adds two further layers (the rest
+of this document explains both):
+
+- **Precise positions** — the raw platform coordinate (Airbnb fuzzes it ~150 m)
+  is improved by geocoding Booking addresses and fusing matched listings across
+  platforms and captures, with a per-listing `location_precision` /
+  `est_accuracy_m` so you know which points are map-grade (§8).
+- **Operator & property identity** — listings are resolved to real operators
+  (`operator_id`, by shared registration/phone/email) and to the same physical
+  flat across or within platforms (`property_group_id`), so "who runs what" and
+  "how many distinct properties" are answerable (§6, §7).
 
 **Scale of the April 2026 capture:**
 
@@ -51,12 +64,25 @@ Every row carries its own provenance:
   any parsing decision can be re-checked against source.
 - **`grid_cell_id`** — which geographic search tile returned the listing (see §8).
 
-Run-level audit lives in two tables:
+Run-level and curation audit lives in these tables:
 
 - **`grid_progress`** — one row per (search tile, platform): status, result
   count, timestamps, error message. This is the cell-by-cell completion record.
 - **`scrape_runs`** — one row per run: start/finish time, cell counts, and
   **`listings_dropped`** (see §5).
+- **`position_observations`** — append-only ledger of every coordinate ever seen
+  for a property (each platform, each capture, scraped + geocoded, with an
+  uncertainty estimate). It is the substrate the position fusion reads (§8), and
+  it lets repeat captures tighten a fuzzed point over time.
+- **`geocode_cache`** — address → coordinate cache (`status` ok/not_found/failed,
+  `attempts`, last-tried), so geocoding is rate-respectful and failures can be
+  re-attempted across runs (`--regeocode`, §15).
+
+The curation-derived columns (`operator_id`, `property_group_id`,
+`latitude_best`/`longitude_best`, `location_precision`, `location_source`,
+`est_accuracy_m`, `position_confidence`) are **recomputed** by the curation stage
+(§4), so they reflect the latest curation rather than first capture and can be
+regenerated on the existing DB with `--curate-only`.
 
 > **Coverage caveat.** `first_seen_at`, `price_original` and `currency_original`
 > are populated for listings captured from April 2026 onward; some earlier rows
@@ -118,7 +144,10 @@ fills the gaps in stages:
   then a browser pass over each listing page for the business + host disclosure.
 
 Targeted re-fetch queries mean a re-run only touches listings that are still
-incomplete.
+incomplete — but re-fetching already-enriched listings recovers only
+genuinely-missing data. Fields the platform simply never exposes (some Airbnb
+host stats / room counts, Booking `max_guests` / VAT) are **not** recovered by
+re-scraping; see §14.
 
 ### Where the business-disclosure data lives
 
@@ -139,6 +168,26 @@ page's serialized application state, in platform-specific places:
 This is internal-API extraction: the platforms can change these structures,
 field names and locations at any time without notice, which is the standing
 reason the scraper is fragile and every figure here is tied to a capture date.
+
+### Curation — dedup, geocoding, position fusion
+
+A final stage runs over the whole DB after scraping + enrichment (and is
+re-runnable on its own, §15). It does not fetch listing content; it derives:
+
+- **Identity dedup** — operators are union-found by shared registration / phone /
+  email (`operator_id`); listings are grouped into the same physical flat,
+  within or across platforms, by a layered matcher (`property_group_id`) — §6, §7.
+- **Geocoding** — Booking street addresses are cleaned (apartment/floor noise
+  stripped, ranges collapsed) and geocoded via OpenStreetMap/Nominatim
+  (rate-limited, cached, drift-guarded so a mis-resolution > 2 km is discarded;
+  failures re-tried with `--regeocode`). Airbnb, which exposes no address, is
+  de-fuzzed by transferring its matched Booking twin's position.
+- **Position fusion** — every coordinate for a property (both platforms, scraped
+  + geocoded, and prior captures from `position_observations`) is fused by
+  inverse-variance weighting into `latitude_best`/`longitude_best`, tagged with
+  `location_precision` / `est_accuracy_m` / `position_confidence` — §8.
+- **Verification** — identity keys cross-check the dedup, and cross-platform
+  position disagreements > 1 km are flagged (`data/exports/dedup_metrics.json`).
 
 ---
 
@@ -169,8 +218,8 @@ bounding box*, but two honest caveats apply:
 
 Booking's ~one-third price gap is real, not a bug: those listings have **no bookable
 night** across any of the 25 tested date windows (booked solid, minimum-stay
-rules, seasonal closure). 29 Airbnb listings never rendered their page state
-even after retries and stayed `Unknown`.
+rules, seasonal closure). 29 Airbnb listings (April figure; 2 in the current
+capture after retry passes) never rendered their page state and stayed `Unknown`.
 
 ---
 
@@ -481,6 +530,10 @@ python -m src.orchestrator --enrich-only
 # Curation only — re-run operator/property dedup + geocode + position fusion on
 # the existing DB, no scraping (geocodes are cached, so this is fast)
 python -m src.orchestrator --curate-only
+
+# Re-attempt cached geocode failures (e.g. after improving address cleaning),
+# then re-curate + re-export
+python -m src.orchestrator --regeocode --curate-only
 
 # Scope to one platform
 python -m src.orchestrator --airbnb-only
