@@ -339,8 +339,12 @@ overwritten). It works as follows:
 3. **Fuse** all of a property's coordinates (both platforms, scraped + geocoded,
    *and* prior captures held in `position_observations`) by **inverse-variance
    weighting** — a precise point dominates a fuzzed one, and independent samples
-   reduce error. → `latitude_best`/`longitude_best`, `est_accuracy_m` (fused σ),
-   `position_confidence` (0–1).
+   reduce error. → `latitude_best`/`longitude_best`, `est_accuracy_m` (the fused
+   σ, in metres), and **`position_confidence` = clamp((150 − `est_accuracy_m`) /
+   150, 0, 1)** — a 0–1 rescaling of that σ where **1 ≈ pinpoint** and **0 ≈ the
+   ~150 m Airbnb fuzz** (so 0.78 ≈ ±33 m, 0.54 ≈ ±69 m). It carries no extra
+   information beyond `est_accuracy_m` — it's just a friendlier handle; filter on
+   either (`confidence ≥ 0.7` ≈ accurate to ~45 m or better).
 4. **Tag** each position: `location_precision` (`exact` ≤ ~40 m σ, else
    `approximate`) and `location_source` (`geocoded_address` /
    `transferred_from_twin` / `platform_coord`).
@@ -440,7 +444,7 @@ identity.
 | `location_precision` | `exact` (≤ ~40 m σ) / `approximate` (§8) | not curated |
 | `location_source` | `geocoded_address` / `transferred_from_twin` / `platform_coord` | not curated |
 | `est_accuracy_m` | Estimated position error in metres (fused σ) | not curated |
-| `position_confidence` | 0–1 trust score for the best position | not curated |
+| `position_confidence` | 0–1 trust score = `clamp((150 − est_accuracy_m)/150, 0, 1)`; 1 ≈ pinpoint, 0 ≈ ~150 m (§8) | not curated |
 | `grid_cell_id` | H3 search tile that returned the listing | — |
 | `first_seen_at` | First discovery time (immutable) | predates the column |
 | `scraped_at` | Last-touched time | never NULL |
