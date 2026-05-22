@@ -27,3 +27,10 @@ scratch_*.py
 CLAUDE.md
 .vscode/
 .idea/
+
+# Report deliverables — generated outputs, not committed (METHODOLOGY.md IS tracked)
+CAPTURE_COMPARISON.md
+NEW_VS_OLD.md
+
+# Run logs
+*.log
