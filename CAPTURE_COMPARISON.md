@@ -222,15 +222,15 @@ positions** for a majority of listings.
 |---|---:|---:|---:|
 | Total listings | 10,901 | 11,110 | **10,982** |
 | Booking Professional / Private | 1,992 / 2,804 | 1,982 / 2,801 | **1,983 / 2,811** |
-| Airbnb Professional / Individual | 2,554 / 3,522 | 2,677 / 3,358 | **2,513 / 3,371** |
-| Airbnb Unknown | 29 | 292 | **301** (after a retry pass: 1,771 → 301) |
-| host_name | 6,076 | 6,198 | **5,884** |
+| Airbnb Professional / Individual | 2,554 / 3,522 | 2,677 / 3,358 | **2,639 / 3,544** |
+| Airbnb Unknown | 29 | 292 | **2** (after two retry passes: 1,771 → 301 → 2) |
+| host_name | 6,076 | 6,198 | **6,183** |
 
 **New — position precision (the headline addition):**
-- **6,481 of 10,982 listings (59%) are now `exact`**, median accuracy **~32 m**
+- **6,540 of 10,982 listings (60%) are now `exact`**, median accuracy **~30 m**
   (vs the ~150 m Airbnb fuzz / mixed Booking before). All listings carry a fused
   `latitude_best`/`longitude_best`.
-- **3,425** positions from geocoded Booking street addresses; **2,834** Airbnb
+- **~3,400** positions from geocoded Booking street addresses; **2,900** Airbnb
   listings de-fuzzed by transferring their matched Booking twin's position.
 - Positions are clean — max best-vs-scraped shift **< 2 km** (a geocode-drift
   guard discards mis-resolutions > 2 km; ~86 discarded). 28 cross-platform groups
@@ -239,12 +239,12 @@ positions** for a majority of listings.
 
 **New — dedup & operators:**
 - The layered dedup (identity-singleton → operator-block → spatial+name) merges
-  more than the old strict 1:1, giving **~8,100 distinct properties** (vs the old
+  more than the old strict 1:1, giving **~8,000 distinct properties** (vs the old
   ~9,400 estimate). Treat it as a tighter, more-merged estimate bracketed against
   the old looser one — see `METHODOLOGY.md` §7.
-- **855 operators** (100 with 10+ listings). Identity union-find now merges the
-  "STR"/"STRE Asset Management" variants into **one operator of 313 listings**.
-- Verification: recall proxy **1.0** (67/67 identity-confirmed cross-platform
+- **858 operators** (103 with 10+ listings). Identity union-find now merges the
+  "STR"/"STRE Asset Management" variants into **one operator of 321 listings**.
+- Verification: recall proxy **1.0** (66/66 identity-confirmed cross-platform
   twins grouped). The precision proxy reads 0% only because Booking and Airbnb
   disclose the **same operator in different ID formats** (CUI vs J-number) — the
   flagged "conflicts" are correct matches, not bad merges.
