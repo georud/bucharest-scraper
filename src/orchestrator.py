@@ -32,6 +32,9 @@ class Orchestrator:
         self.db = Database()
         self.dedup = Deduplicator()
         self.proxy = ProxyManager(config.proxy_urls)
+        # When True, the curation stage clears cached geocode failures first so
+        # they're re-attempted (e.g. after improving address cleaning). Set by --regeocode.
+        self.regeocode = False
         # Accumulates parse/drop counts across both platforms for the audit trail.
         self._run_parse_stats = ParseStats()
 
@@ -159,6 +162,10 @@ class Orchestrator:
         geocoding + position fusion, and verification. Runs over the whole DB.
         Idempotent — safe to re-run via --curate-only."""
         from .geo.curate import run_curation
+
+        if self.regeocode:
+            cleared = self.db.clear_failed_geocodes()
+            logger.info("Curation: cleared %d failed/not_found geocode-cache rows for re-attempt", cleared)
 
         backfill_rows = None
         backups = sorted(glob.glob(str(self.db.db_path) + ".backup-*"))
@@ -577,6 +584,7 @@ def main():
     platforms = None
     enrich_only = False
     curate_only = False
+    regeocode = False
 
     args = sys.argv[1:]
     for i, arg in enumerate(args):
@@ -590,6 +598,10 @@ def main():
             enrich_only = True
         elif arg == "--curate-only":
             curate_only = True
+        elif arg == "--regeocode":
+            regeocode = True
+
+    orchestrator.regeocode = regeocode
 
     if curate_only:
         try:

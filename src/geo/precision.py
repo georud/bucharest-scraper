@@ -14,17 +14,36 @@ _STREET_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Apartment-level / building tokens — truncate the address at the first one.
+# `sc\d+`/`bl\d+` catch attached codes like "sc1"; bare `sc`/`bl`/`et`/`ap`
+# catch the spelled abbreviations.
 _GEOCODE_NOISE = re.compile(
-    r"\b(?:bloc|bl|scara|sc|etaj|et|apartament|apart|ap|corp|floor|apartment|room)\b",
+    r"\b(?:bloc|bl|sc\d+|bl\d+|scara|sc|etaj|et|apartament|apart|ap|corp|floor|"
+    r"apartment|room|parter|casa|cladirea|cladire|building|demisol|subsol|mansarda)\b",
     re.IGNORECASE,
 )
+# "nr."/"nr" is a number prefix — drop the word but keep the number that follows.
+_NR_RE = re.compile(r"\s*,?\s*\bnr\b\.?\s*", re.IGNORECASE)
+# A number range ("94-100") — keep the first value.
+_RANGE_RE = re.compile(r"(\d+)\s*[-–]\s*\d+")
+# A trailing block code after a comma ("..., A2", "..., 12B") — drop it. Requires
+# a letter so a bare trailing street number ("..., 12") is preserved.
+_TRAILING_CODE_RE = re.compile(r",\s*(?:[a-z]{1,3}\s*\d+|\d+\s*[a-z])\s*$", re.IGNORECASE)
+
+
+def _clean_street(address: str) -> str:
+    a = _RANGE_RE.sub(r"\1", address)
+    a = _NR_RE.sub(" ", a)
+    a = _GEOCODE_NOISE.split(a, maxsplit=1)[0]
+    a = _TRAILING_CODE_RE.sub("", a)
+    return a.strip(" ,.")
 
 
 def extract_booking_address(raw_json: str | None) -> str | None:
     """Return a geocodable 'street+number, city' from a Booking raw_json
     location block (basicPropertyData.location, fallback top-level location).
-    Apartment-level detail (bloc/scara/etaj/apartament/...) is stripped so
-    Nominatim can resolve the street; returns None if no address."""
+    Apartment/floor/building detail and `nr.` prefixes are stripped and number
+    ranges collapsed so Nominatim can resolve the street; None if no address."""
     if not raw_json:
         return None
     try:
@@ -36,10 +55,7 @@ def extract_booking_address(raw_json: str | None) -> str | None:
     loc = (obj.get("basicPropertyData") or {}).get("location") or obj.get("location") or {}
     if not isinstance(loc, dict):
         return None
-    address = (loc.get("address") or "").strip()
-    if not address:
-        return None
-    address = _GEOCODE_NOISE.split(address, maxsplit=1)[0].strip(" ,.")
+    address = _clean_street((loc.get("address") or "").strip())
     if not address:
         return None
     city = (loc.get("city") or "").strip()

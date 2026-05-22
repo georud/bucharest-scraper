@@ -350,7 +350,11 @@ class Database:
         return len(rows)
 
     def get_listings_missing_data(self, platform: Platform) -> list[Listing]:
-        """Get listings that are missing room data (beds, bathrooms, max_guests all NULL)."""
+        """Get listings missing ANY room field (bedrooms / beds / bathrooms).
+
+        Uses OR (not all-NULL AND) so a listing missing only one field is still
+        re-fetched. `max_guests` is excluded — Booking never exposes it, so it
+        would match every Booking row."""
         rows = self.conn.execute(
             """SELECT id, platform, platform_id, name, latitude, longitude,
                       property_type, star_rating, review_score, review_count,
@@ -364,7 +368,7 @@ class Database:
                       price_original, currency_original, cross_platform_group_id, first_seen_at
                FROM listings
                WHERE platform = ?
-                 AND beds IS NULL AND bathrooms IS NULL AND max_guests IS NULL""",
+                 AND (bedrooms IS NULL OR beds IS NULL OR bathrooms IS NULL)""",
             (platform.value,),
         ).fetchall()
 
@@ -478,6 +482,8 @@ class Database:
           - Never-checked listings (business_type IS NULL)
           - Professional listings still missing `business_trade_register_name` — i.e.
             checked under an earlier parser version. Re-fetch is safe and idempotent.
+          - Airbnb listings missing host stats (`host_response_rate` /
+            `host_join_date`) — the modal carries these, so re-open it to fill them.
         """
         # Note: `business_trade_register_name` is Booking-only (Airbnb doesn't
         # expose it), so that sub-clause is scoped with `platform = 'booking'`.
@@ -498,6 +504,8 @@ class Database:
                      OR business_type = 'Unknown'
                      OR (platform = 'booking' AND business_type = 'Professional'
                          AND business_trade_register_name IS NULL)
+                     OR (platform = 'airbnb'
+                         AND (host_response_rate IS NULL OR host_join_date IS NULL))
                    )"""
         params: tuple = (platform.value,)
         if limit is not None:
@@ -880,6 +888,16 @@ class Database:
              datetime.utcnow().isoformat()),
         )
         self.conn.commit()
+
+    def clear_failed_geocodes(self) -> int:
+        """Delete cached geocode failures (`not_found` / `failed`) so they are
+        re-attempted on the next curation — e.g. after improving address cleaning.
+        Successful (`ok`) entries are kept. Returns rows deleted."""
+        cur = self.conn.execute(
+            "DELETE FROM geocode_cache WHERE status IN ('not_found', 'failed')"
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     def close(self):
         self.conn.close()

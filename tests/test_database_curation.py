@@ -97,3 +97,34 @@ def test_set_fused_positions_writes_columns(db):
     ).fetchone()
     assert row[0] == 44.43
     assert row[1] == "exact"
+
+
+def test_missing_data_targets_partial_room(db):
+    # beds set but bathrooms/bedrooms NULL -> still re-fetched (OR-any, not all-NULL).
+    _mk(db, "airbnb_5", Platform.AIRBNB, "Partial", 44.43, 26.10, beds=2, max_guests=4)
+    _mk(db, "airbnb_6", Platform.AIRBNB, "Complete", 44.44, 26.11,
+        bedrooms=1, beds=2, bathrooms=1.0, max_guests=4)
+    ids = {l.id for l in db.get_listings_missing_data(Platform.AIRBNB)}
+    assert "airbnb_5" in ids
+    assert "airbnb_6" not in ids
+
+
+def test_missing_business_targets_host_stat_gap(db):
+    # Airbnb with business_type set but a host stat NULL -> re-fetched via Phase 3.
+    _mk(db, "airbnb_7", Platform.AIRBNB, "HostGap", 44.43, 26.10,
+        business_type="Individual", host_response_rate="100%")  # host_join_date NULL
+    _mk(db, "airbnb_8", Platform.AIRBNB, "HostFull", 44.44, 26.11,
+        business_type="Individual", host_response_rate="100%", host_join_date="Joined in 2019")
+    ids = {l.id for l in db.get_listings_missing_business_data(Platform.AIRBNB)}
+    assert "airbnb_7" in ids
+    assert "airbnb_8" not in ids
+
+
+def test_clear_failed_geocodes_keeps_ok(db):
+    db.upsert_geocode("addr_ok", "ok", 44.4, 26.1, "building", 1)
+    db.upsert_geocode("addr_nf", "not_found", None, None, None, 1)
+    db.upsert_geocode("addr_fail", "failed", None, None, None, 2)
+    assert db.clear_failed_geocodes() == 2
+    assert db.get_geocode("addr_ok") is not None
+    assert db.get_geocode("addr_nf") is None
+    assert db.get_geocode("addr_fail") is None

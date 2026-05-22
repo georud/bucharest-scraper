@@ -28,3 +28,20 @@ def test_classify_booking_vague_or_stacked():
 def test_classify_airbnb_always_fuzzed():
     _, sigma = classify_scraped_precision({"platform": "airbnb", "raw_json": None}, stack_count=1)
     assert sigma == 100.0
+
+
+def _bk(address, city="Bucuresti"):
+    import json
+    return json.dumps({"basicPropertyData": {"location": {"address": address, "city": city}}})
+
+
+def test_clean_address_handles_residual_noise():
+    # Real geocode-failure patterns: nr. prefix, casa/parter/building tokens,
+    # trailing block code, number range — all reduced to 'street number, city'.
+    assert extract_booking_address(_bk("Strada Guraslau nr.27 casa 4", "Magurele")) == "Strada Guraslau 27, Magurele"
+    assert extract_booking_address(_bk("Bulevardul Iuliu Maniu, nr.484")) == "Bulevardul Iuliu Maniu 484, Bucuresti"
+    assert extract_booking_address(_bk("Drumul Bacriului 12 parter")) == "Drumul Bacriului 12, Bucuresti"
+    assert extract_booking_address(_bk("24 Strada Preciziei, A2 building", "Bucharest")) == "24 Strada Preciziei, Bucharest"
+    assert extract_booking_address(_bk("Prelungirea Ghencea 94-100")) == "Prelungirea Ghencea 94, Bucuresti"
+    # A bare trailing street number must NOT be stripped as a block code.
+    assert extract_booking_address(_bk("Strada Lipscani, 5")) == "Strada Lipscani, 5, Bucuresti"
