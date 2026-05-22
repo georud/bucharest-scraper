@@ -181,87 +181,135 @@ single biggest way to get a number wrong.
 
 - **Listing** — one row. The same flat can be listed more than once, on one
   platform or both.
-- **Property** — one physical place. The April 2026 capture has 10,901 listing
-  rows but an estimated **9,363 distinct properties**, because 3,076 rows are
-  the same flat appearing on both Booking and Airbnb (1,538 cross-platform
-  pairs — see §7).
+- **Property** — one physical place. The May 2026 capture has 10,982 listing
+  rows but an estimated **~8,100 distinct properties**, because many rows are the
+  same flat appearing twice (cross-platform or within a platform) — 2,065
+  property groups, see §7.
 - **Host** — the account doing the letting (`host_id`, `host_name` — Airbnb).
-- **Operator / trader** — the registered business behind a professional listing
-  (`business_registration_number`, `business_name`). One operator routinely runs
-  many properties across many listings: the largest in this capture,
-  **STR Asset Management** (reg. RO41137103), is attached to **198 listings**
-  across both platforms. 121 operators have 10+ listings each.
+- **Operator / trader** — the registered business behind a professional listing.
+  One operator routinely runs many properties across many listings: the largest
+  in this capture, **STRE Asset Management SRL**, is attached to **313 listings**
+  across both platforms (the operator layer now merges its "STR"/"STRE" variants
+  — see below). 100 operators have 10+ listings each.
 
 The dataset gives you two tools for correct counting:
 
-- **`cross_platform_group_id`** — listings judged to be the same physical flat
-  across Booking and Airbnb share this id. Count distinct properties with
-  `COUNT(DISTINCT COALESCE(cross_platform_group_id, id))`.
-- **`operators.csv`** / `get_operator_summary()` — one row per operator, with
-  listing count and platforms. *Caveat:* operators are keyed on
-  `business_registration_number` and that field is **not normalised** — e.g.
-  `RO41137103` and `RO 41137103` (a stray space) are currently treated as two
-  operators. Treat the operator count as a slight over-count and spot-check the
-  big ones.
+- **`property_group_id`** — listings judged to be the same physical flat (within
+  *or* across platforms) share this id. Count distinct properties with
+  `COUNT(DISTINCT COALESCE(property_group_id, id))`. (`cross_platform_group_id`
+  is the subset of those groups that span both platforms.)
+- **`operator_id`** / **`operators.csv`** — one row per operator. Operators are
+  now keyed by a **normalised identity union-find** (registration / phone /
+  email), so whitespace/prefix variants of one registration no longer split it.
+  *Residual caveat:* Booking and Airbnb sometimes disclose the **same** operator
+  in **different formats** (Booking the CUI, Airbnb the trade-register J-number),
+  with no deterministic mapping between them — so one real operator can still
+  appear as two `operator_id`s across platforms. The operator count is therefore
+  a mild **over**-count; spot-check the big ones.
 
 ---
 
 ## 7. Deduplication — in full
 
-Three layers, and what each does *not* catch:
+Deduplication runs at two levels — **operator** and **property** — written to
+`operator_id` and `property_group_id`. **Nothing is ever deleted**; both platform
+rows are kept with their own price/host/business data, and only shared ids are
+written so correct counts are possible.
 
-1. **Exact platform-id** — a listing returned twice by overlapping search tiles
-   is collapsed by its platform id. Reliable and global across a run.
-2. **Spatial + fuzzy-name, within platform** — within a search tile, listings
-   under 50 m apart with >70% name similarity are treated as one. Catches a
-   property that the platform returns under variant ids. Runs **per tile**, so a
-   variant-id duplicate split across two tiles can survive.
-3. **Cross-platform linking** (`cross_platform_group_id`) — after all scraping,
-   each Booking listing is paired with the *single* Airbnb listing most likely
-   to be the same flat: candidate pairs (within 100 m, >72% name similarity) are
-   ranked by name similarity and accepted greedily, **1:1** — a listing joins at
-   most one pair, and every group is exactly one Booking + one Airbnb row. No
-   transitive chaining. April 2026: 1,538 cross-platform pairs linking 3,076
-   listings. **Nothing is deleted** — both platform rows are kept, on their own
-   platforms, with their own price/host/business data; only a shared id is
-   written so distinct-property counts are possible.
+**Operator layer (`operator_id`).** Listings that share a *normalised* identity
+key — registration number, phone, or email — are unioned into one operator
+(union-find; safe, because a shared registration/phone genuinely is one operator,
+unlike GPS+name). This **fixes** the old un-normalised-key problem: the "STR" /
+"STRE Asset Management" variants now collapse into a single operator of **313
+listings** across both platforms. May 2026: 855 operators carry an `operator_id`,
+100 of them with 10+ listings.
 
-**Cross-platform linking is best-effort, and you must treat it as such.**
-Because Airbnb fuzzes coordinates (§8), a true Booking↔Airbnb pair whose Airbnb
-point drifted beyond 100 m is *missed*, and two genuinely different flats in the
-same building can be *wrongly linked*. The 1:1 rule deliberately **under-merges**
-— a flat listed twice on one platform plus once on the other gets only its best
-cross-platform pair linked — because that is far safer than over-merging. Name
-similarity is the corroborating signal but it is not proof. The 9,363
-distinct-property figure is therefore an **estimate** — directionally a much
-better count than 10,901, but not exact.
+**Property layer (`property_group_id`)** groups listings that are the same
+physical flat, within *or* across platforms, by three confidence tiers:
+
+1. **Tier 0 — singleton identity.** A contact (phone/email/registration) mapping
+   to exactly one Booking *and* one Airbnb listing links that pair directly — a
+   single-property host — even when GPS/name disagree. Catches twins that
+   proximity+name miss (Airbnb fuzzed far, different titles).
+2. **Tier 1 — within an operator block.** Among one operator's listings, pairs
+   within 250 m with matching name *or* room configuration are grouped.
+3. **Tier 2 — spatial + name.** Outside operator blocks, pairs under 100 m with
+   ≥80% name similarity.
+
+Matching is greedy with a **clique check** (a listing joins a group only if
+compatible with *every* member), which structurally prevents one operator's
+shared phone from chaining its distant flats together. May 2026: 2,065 property
+groups covering 4,943 listings (1,484 of them span both platforms), giving an
+estimated **~8,100 distinct properties** from 10,982 rows.
+
+**Treat the property count as an estimate, bracketed on both sides.** Airbnb's
+coordinate fuzz (§8) means a true twin can be missed; conversely Tier 1 can
+*over-merge* two genuinely different units of one operator if they sit within
+250 m with similar names. The earlier strict-1:1 method under-merged (~9,400
+distinct); this layered method merges more aggressively (~8,100). The truth lies
+between. **Verification:** for groups carrying identity keys on both sides, a
+recall proxy confirms **100% (67/67)** of identity-confirmed cross-platform twins
+were grouped; the precision proxy reads 0% only because the *same operator is
+often disclosed with different identity formats on each platform* (Booking gives
+the CUI, Airbnb the trade-register J-number) — so the "conflicts" it flags are
+actually correct matches the identity check can't confirm, not bad merges. See
+`data/exports/dedup_metrics.json` and `dedup_review.csv`.
 
 ---
 
 ## 8. Geographic precision — what the coordinates actually mean
 
-A listing's latitude/longitude is **not** a precise address.
+The **as-scraped** `latitude`/`longitude` are **not** a precise address:
 
 - **Airbnb deliberately obfuscates location.** For an unbooked listing the API
   returns an *approximate* coordinate — Airbnb jitters the true point within a
-  ~150 m circle and only reveals the exact address after booking. Every Airbnb
-  coordinate in this dataset is that obfuscated point. An Airbnb pin can be
-  100–200 m off; a cluster of Airbnb pins on one building is an artefact.
-- **Booking is mixed.** Hotels carry a genuine geocoded location. Apartments and
-  vacation rentals are often geocoded to a street, a neighbourhood centroid or a
-  building cluster — and the API does not flag which.
-- **The H3 cell is more reliable than the point.** `grid_cell_id` places a
-  listing inside a hexagon of a few hundred metres *even when the lat/lng is
-  fuzzed*, because it comes from the search tile that returned the listing.
-  **Aggregate / heat-map analysis at cell resolution is sound; point-level "this
-  flat is at this spot" analysis is not** — least of all for Airbnb.
+  ~150 m circle and reveals the exact address only after booking. (The detail
+  page confirms this: it carries a `mapMarkerRadius` + location disclaimer and
+  no street address.) A raw Airbnb pin can be 100–200 m off.
+- **Booking is mixed.** Hotels carry a genuine geocoded location; apartments are
+  often geocoded to a street, neighbourhood centroid or building cluster. But
+  Booking's `raw_json` *does* carry a full street address (number / *strada* /
+  *bloc* / *apartament*) for ~98% of listings — which the pipeline uses (below).
 - **Trader address ≠ map pin.** `business_address` is the operator's *registered
-  company address*. A property manager's registered office is frequently nowhere
-  near the flats it runs. Do not plot `business_address` as the listing location.
+  company address*, frequently nowhere near the flats it runs. Never plot it.
 
-**Recommendation:** treat coordinates as neighbourhood-level for Airbnb and
-property-or-better for Booking hotels; use `grid_cell_id` for spatial
-aggregation.
+### What the curation stage does about it
+
+A post-enrichment stage computes an **improved** position and **tags how much to
+trust it**, while **preserving the originals** (`latitude`/`longitude` are never
+overwritten). It works as follows:
+
+1. **Geocode Booking street addresses** via OpenStreetMap/Nominatim (rate-limited,
+   cached, persistent retry). The address is cleaned to street + number first
+   (apartment-level noise stripped), giving a ~74% resolve rate. A geocode is
+   **discarded if it lands > 2 km from the scraped point** (a sanity guard
+   against mis-resolutions). → `latitude_geocoded`/`longitude_geocoded`.
+2. **Transfer to Airbnb twins.** Where a fuzzed Airbnb listing is matched to a
+   Booking twin (§7), the Booking precise position is carried over — this is the
+   only way to de-fuzz Airbnb, which exposes no address of its own.
+3. **Fuse** all of a property's coordinates (both platforms, scraped + geocoded,
+   *and* prior captures held in `position_observations`) by **inverse-variance
+   weighting** — a precise point dominates a fuzzed one, and independent samples
+   reduce error. → `latitude_best`/`longitude_best`, `est_accuracy_m` (fused σ),
+   `position_confidence` (0–1).
+4. **Tag** each position: `location_precision` (`exact` ≤ ~40 m σ, else
+   `approximate`) and `location_source` (`geocoded_address` /
+   `transferred_from_twin` / `platform_coord`).
+
+**Result (May 2026 capture):** of 10,982 listings, **6,481 (59%) are `exact`**
+(median accuracy ~32 m, 3,425 from geocoded Booking addresses, 2,834 Airbnb
+de-fuzzed via a twin); the remaining ~41% stay `approximate` (Airbnb with no
+twin, or un-geocodable Booking). Map/exports use `latitude_best`/`longitude_best`.
+
+**How to use it:**
+- **Map / cite a point only where `location_precision = 'exact'`** (optionally
+  filter `position_confidence ≥ 0.7`). For `approximate` rows, fall back to
+  neighbourhood-level reasoning and `grid_cell_id` (the H3 search tile, reliable
+  to a few hundred metres even when the point is fuzzed).
+- **A few links are wrong.** ~28 cross-platform groups whose Booking and Airbnb
+  points disagree by > 1 km are flagged in `dedup_metrics.json →
+  geo_conflict_groups`; the pipeline does **not** transfer positions across them,
+  but treat those groups' positions with suspicion.
 
 ---
 
@@ -308,7 +356,7 @@ identity.
 | `platform` | `booking` or `airbnb` | never NULL |
 | `platform_id` | The platform's own listing id | never NULL |
 | `name` | Listing title | never NULL |
-| `latitude`, `longitude` | Coordinates — **see §8, precision-limited** | never NULL |
+| `latitude`, `longitude` | **As-scraped** coordinates, precision-limited (§8); for mapping use `*_best` | never NULL |
 | `property_type` | e.g. apartment, hotel, guest house | not stated by platform |
 | `star_rating` | Hotel star rating (Booking) | not a rated hotel |
 | `review_score` | Guest review score, 0–10 normalised | no reviews yet |
@@ -332,7 +380,16 @@ identity.
 | `host_name` | Host display name (Airbnb) | Booking, or not captured |
 | `host_id` | Platform user id of the host | as above |
 | `host_response_rate`, `host_response_time`, `host_join_date` | Airbnb host profile stats | not captured / not on page |
-| `cross_platform_group_id` | Shared id for the same flat across platforms (§7) | no cross-platform match found |
+| `operator_id` | Operator id — normalised identity union-find (§6, §7) | not a trader / no identity key |
+| `property_group_id` | Same physical flat, within or across platforms (§7) | not matched to another listing |
+| `cross_platform_group_id` | The subset of property groups that span both platforms (§7) | no cross-platform match |
+| `latitude_best`, `longitude_best` | **Fused best position — use these for mapping** (§8) | no coordinate at all |
+| `latitude_geocoded`, `longitude_geocoded` | Geocoded Booking street address (§8) | not geocoded / not Booking |
+| `geocoded_address` | The cleaned address string that was geocoded | as above |
+| `location_precision` | `exact` (≤ ~40 m σ) / `approximate` (§8) | not curated |
+| `location_source` | `geocoded_address` / `transferred_from_twin` / `platform_coord` | not curated |
+| `est_accuracy_m` | Estimated position error in metres (fused σ) | not curated |
+| `position_confidence` | 0–1 trust score for the best position | not curated |
 | `grid_cell_id` | H3 search tile that returned the listing | — |
 | `first_seen_at` | First discovery time (immutable) | predates the column |
 | `scraped_at` | Last-touched time | never NULL |
@@ -390,21 +447,22 @@ until you've done the cross-checks this document points to.**
 Residual uncertainty: classification depends entirely on the platforms' own
 labelling — the signals above — which they can restructure or rename without
 notice. It is only as accurate as what Booking and Airbnb themselves publish.
-`Unknown` (29 Airbnb rows) means the page state never rendered the signal — it
-is not a synonym for "individual".
+`Unknown` (301 Airbnb rows in this capture) means the page state never rendered
+the signal — Airbnb anti-bot blocking, **not** a synonym for "individual". Retry
+passes recover most of them (this capture went 1,771 → 301 in a single pass).
 
 ---
 
 ## 14. Known limitations
 
 - **Denominator unknown** — cannot prove the dataset is every Bucharest listing (§5).
-- **Price gaps** — 31% of Booking listings have no price; genuinely unbookable on tested dates (§5, §10).
-- **Coordinates are imprecise** — Airbnb ~150 m fuzz, Booking mixed (§8).
-- **Cross-platform linking is best-effort** — strict 1:1 pairs, deliberately under-merging; false negatives and positives both possible; 9,363 distinct properties is an estimate (§7).
+- **Price gaps** — ~35% of Booking listings have no price; genuinely unbookable on tested dates (§5, §10).
+- **Coordinates** — as-scraped points are imprecise (Airbnb ~150 m fuzz). The curation stage lifts ~59% to `exact` (~32 m median) via geocoding + cross-platform/temporal fusion, but ~41% stay `approximate`; map only `exact` rows (§8).
+- **Dedup is an estimate, bracketed both ways** — the layered method merges more aggressively than the old strict-1:1 (~8,100 vs ~9,400 distinct properties); Tier-1 can over-merge an operator's similar nearby units, Airbnb fuzz can miss twins (§7).
 - **Business data is unverified** — not checked against ONRC/VIES (§9).
-- **Operator keys not normalised** — registration-number whitespace/prefix variants split one operator into several (§6).
-- **`first_seen_at` / `price_original` / `currency_original`** — populated from the April 2026 capture onward; NULL on older rows.
-- **~62 Booking "Professional" listings** carry `contactDetails: null` upstream — flagged as traders but with no disclosed company data.
+- **Operator linking** — normalised via identity union-find, but the same operator can still split across platforms when Booking and Airbnb disclose different ID formats (CUI vs J-number) (§6).
+- **Airbnb `Unknown` (301)** — anti-bot blocking left these unclassified after retries; not "individual" (§13).
+- **~28 cross-platform groups disagree > 1 km** on position — flagged in `dedup_metrics.json`; positions not transferred across them (§8).
 - **Self-reported everything** — names, prices, registration numbers, host stats are all what the host entered and the platform displayed.
 
 ---
@@ -412,11 +470,15 @@ is not a synonym for "individual".
 ## 15. Reproducing a run
 
 ```bash
-# Full pipeline: grid → scrape → refine → enrich → cross-platform link → export
+# Full pipeline: grid → scrape → refine → enrich → curate (dedup + geo) → export
 python -m src.orchestrator
 
-# Enrichment only (re-uses listings already in the DB)
+# Enrichment only (re-uses listings already in the DB; also re-curates + exports)
 python -m src.orchestrator --enrich-only
+
+# Curation only — re-run operator/property dedup + geocode + position fusion on
+# the existing DB, no scraping (geocodes are cached, so this is fast)
+python -m src.orchestrator --curate-only
 
 # Scope to one platform
 python -m src.orchestrator --airbnb-only

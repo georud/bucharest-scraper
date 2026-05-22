@@ -206,3 +206,51 @@ and its `Unknown` / drop figures, never as an absolute.
 - Neither capture is a census. Both are dated snapshots with ~10%/month churn,
   platform-side disclosure gaps, and an anti-bot residual on Airbnb. Cite
   accordingly — see `METHODOLOGY.md` §12, "What you can — and cannot — claim".
+
+---
+
+## 11. May 21–22 re-capture + position curation *(added 2026-05-22)*
+
+A third capture was taken with the new **geo/dedup curation stage** (operator +
+property dedup, address geocoding, cross-platform/temporal position fusion,
+precision tagging). This is the first capture with **trustworthy point-level
+positions** for a majority of listings.
+
+**Volume & trader (consistent with May 15 — validates the pipeline):**
+
+| Metric | Apr | May 15 | **May 21–22** |
+|---|---:|---:|---:|
+| Total listings | 10,901 | 11,110 | **10,982** |
+| Booking Professional / Private | 1,992 / 2,804 | 1,982 / 2,801 | **1,983 / 2,811** |
+| Airbnb Professional / Individual | 2,554 / 3,522 | 2,677 / 3,358 | **2,513 / 3,371** |
+| Airbnb Unknown | 29 | 292 | **301** (after a retry pass: 1,771 → 301) |
+| host_name | 6,076 | 6,198 | **5,884** |
+
+**New — position precision (the headline addition):**
+- **6,481 of 10,982 listings (59%) are now `exact`**, median accuracy **~32 m**
+  (vs the ~150 m Airbnb fuzz / mixed Booking before). All listings carry a fused
+  `latitude_best`/`longitude_best`.
+- **3,425** positions from geocoded Booking street addresses; **2,834** Airbnb
+  listings de-fuzzed by transferring their matched Booking twin's position.
+- Positions are clean — max best-vs-scraped shift **< 2 km** (a geocode-drift
+  guard discards mis-resolutions > 2 km; ~86 discarded). 28 cross-platform groups
+  disagree > 1 km and are flagged (not transferred). The remaining ~41% stay
+  `approximate` (Airbnb with no twin / un-geocodable Booking).
+
+**New — dedup & operators:**
+- The layered dedup (identity-singleton → operator-block → spatial+name) merges
+  more than the old strict 1:1, giving **~8,100 distinct properties** (vs the old
+  ~9,400 estimate). Treat it as a tighter, more-merged estimate bracketed against
+  the old looser one — see `METHODOLOGY.md` §7.
+- **855 operators** (100 with 10+ listings). Identity union-find now merges the
+  "STR"/"STRE Asset Management" variants into **one operator of 313 listings**.
+- Verification: recall proxy **1.0** (67/67 identity-confirmed cross-platform
+  twins grouped). The precision proxy reads 0% only because Booking and Airbnb
+  disclose the **same operator in different ID formats** (CUI vs J-number) — the
+  flagged "conflicts" are correct matches, not bad merges.
+
+**Bottom line:** the structural story is unchanged across all three captures
+(~stable trader split, ~100 operators with 10+ listings). What's new is that you
+can now **map and cite individual points where `location_precision = 'exact'`**
+(optionally `position_confidence ≥ 0.7`) — previously impossible. Keep using
+`grid_cell_id` for the `approximate` rows.
