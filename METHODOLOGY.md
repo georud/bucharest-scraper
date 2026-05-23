@@ -47,6 +47,8 @@ of this document explains both):
 | With full company disclosure captured | 1,932 | 2,547 | 4,479 |
 | Distinct operators identified | — | — | 3,151 |
 
+This capture (21–22 May 2026) is a snapshot taken days after [EU Regulation 2024/1028](https://eur-lex.europa.eu/eli/reg/2024/1028/oj/eng) on short-term-rental data transparency became applicable (20 May 2026) and amid Romania's ongoing registration crackdown, making the trader and registration layer particularly timely.
+
 One **row = one platform listing**. A row is *not* a property and *not* an
 operator — see §6, the most important section for anyone counting things.
 
@@ -93,10 +95,20 @@ regenerated on the existing DB with `--curate-only`.
 
 ## 3. Legal & ethical basis
 
-- **The business data is public regulatory disclosure.** Under the DSA the
-  platforms themselves publish trader identity on the listing page. This project
-  aggregates what Booking and Airbnb already display — it does not obtain
-  anything the public cannot see on the live site.
+- **The business data is public regulatory disclosure.** [DSA Article 30](https://www.eu-digital-services-act.com/Digital_Services_Act_Article_30.html)
+  requires online marketplaces to collect and display — "in a clear, easily
+  accessible and comprehensible manner" — on each trader's listing: name,
+  address, phone, email, identification number, and trade-register number.
+  This project aggregates what Booking and Airbnb already display under that
+  obligation; it does not obtain anything the public cannot see on the live
+  site. Art. 30(2) requires platforms only to make "best efforts" to verify
+  what traders submit, which is why some rows are incomplete.
+- **EU Reg 2024/1028** (applicable 20 May 2026) adds a per-unit
+  registration-number requirement and a monthly data-sharing regime for
+  short-term rental platforms — see [EUR-Lex](https://eur-lex.europa.eu/eli/reg/2024/1028/oj/eng).
+  Romania separately requires a Ministry-of-Tourism classification certificate
+  for STR units, with ANAF scrutinising approximately 23,000 hosts —
+  [Romania Insider](https://www.romania-insider.com/apartment-rent-airbnb-romania-registration).
 - **No private personal data is collected.** For non-professional ("individual"
   / "private") hosts the platforms disclose only a first name; that is all this
   dataset holds. No emails, phones or addresses are captured for individuals —
@@ -232,8 +244,8 @@ single biggest way to get a number wrong.
 - **Listing** — one row. The same flat can be listed more than once, on one
   platform or both.
 - **Property** — one physical place. The May 2026 capture has 10,982 listing
-  rows but an estimated **~8,000 distinct properties**, because many rows are the
-  same flat appearing twice (cross-platform or within a platform) — 2,092
+  rows but an estimated **~8,036 distinct properties**, because many rows are the
+  same flat appearing twice (cross-platform or within a platform) — 2,094
   property groups, see §7.
 - **Host** — the account doing the letting (`host_id`, `host_name` — Airbnb).
 - **Operator / trader** — the registered business behind a professional listing.
@@ -271,7 +283,7 @@ key — registration number, phone, or email — are unioned into one operator
 (union-find; safe, because a shared registration/phone genuinely is one operator,
 unlike GPS+name). This **fixes** the old un-normalised-key problem: the "STR" /
 "STRE Asset Management" variants now collapse into a single operator of **313
-listings** across both platforms. May 2026: 858 operators carry an `operator_id`,
+listings** across both platforms. May 2026: 859 operators carry an `operator_id`,
 103 of them with 10+ listings.
 
 **Property layer (`property_group_id`)** groups listings that are the same
@@ -288,9 +300,9 @@ physical flat, within *or* across platforms, by three confidence tiers:
 
 Matching is greedy with a **clique check** (a listing joins a group only if
 compatible with *every* member), which structurally prevents one operator's
-shared phone from chaining its distant flats together. May 2026: 2,092 property
-groups covering 4,943 listings (1,494 of them span both platforms), giving an
-estimated **~8,000 distinct properties** from 10,982 rows.
+shared phone from chaining its distant flats together. May 2026: 2,094 property
+groups (1,495 spanning both platforms), giving an
+estimated **~8,036 distinct properties** from 10,982 rows.
 
 **Treat the property count as an estimate, bracketed on both sides.** Airbnb's
 coordinate fuzz (§8) means a true twin can be missed; conversely Tier 1 can
@@ -305,6 +317,8 @@ the CUI, Airbnb the trade-register J-number) — so the "conflicts" it flags are
 actually correct matches the identity check can't confirm, not bad merges. See
 `data/exports/dedup_metrics.json` and `dedup_review.csv`.
 
+Unlike [Inside Airbnb](https://insideairbnb.com/data-assumptions/), which links records only by Airbnb listing id, this pipeline layers in operator union-find over shared identity keys and cross-platform property grouping — matching the same physical unit across Booking and Airbnb even when titles and coordinates differ.
+
 ---
 
 ## 8. Geographic precision — what the coordinates actually mean
@@ -312,11 +326,21 @@ actually correct matches the identity check can't confirm, not bad merges. See
 The **as-scraped** `latitude`/`longitude` are **not** a precise address:
 
 - **Airbnb obfuscates *some* listings, not all.** The listing page carries
-  `mapMarkerRadiusInMeters`: `0` means the host exposes the **exact** location
-  (the returned coordinate is the true point), while `~152` is the standard ~150 m
-  fuzz circle (`500` = extra-fuzzed). In this capture **~48% of Airbnb listings
-  are radius-0 (exact)**; the rest jitter the point within ~150 m. The tag is on
-  the detail page only — captured by the radius pass below.
+  `mapMarkerRadiusInMeters`, which directly reflects the host's
+  [**"Precise location" vs "Approximate location"**](https://www.airbnb.com/help/article/2141)
+  privacy choice in their settings. `0` = **Precise**: the coordinate IS the
+  true point (only the street number is withheld until booking). `~152` (or
+  `500`) = **Approximate**: the unit sits somewhere within a shaded circle of
+  that radius — Airbnb jitters the point within ~150 m of the real address.
+  [Inside Airbnb documents the same ~150 m fuzz plus individual-building
+  scatter](https://insideairbnb.com/data-assumptions/). A Harvard study
+  ([Wilson & Sherbin 2018](https://techscience.org/a/2018100902/)) re-identified
+  hosts from their fuzzed Airbnb coordinates 94% of the time — context for why
+  cross-platform de-fuzzing works in this pipeline AND a reminder that
+  `approximate` rows still carry meaningful location signal. In this capture
+  Airbnb's radius was retrieved for **6,122 of 6,185 listings (~99%)**; **63
+  blocked**. Of those captured, **2,978 (~49%) are radius-0 (exact)**. The tag
+  is on the detail page only — captured by the radius pass below.
 - **Booking is mixed.** Hotels carry a genuine geocoded location; apartments are
   often geocoded to a street, neighbourhood centroid or building cluster. But
   Booking's `raw_json` *does* carry a full street address (number / *strada* /
@@ -359,15 +383,16 @@ overwritten). It works as follows:
    said — so a fuzzed Airbnb listing fused to `exact` via a twin reads
    `location_precision=exact`, `platform_precision=approximate`.
 
-**Result (May 2026 capture):** of 10,982 listings, **8,582 (78%) are `exact`**
+**Result (May 2026 capture):** of 10,982 listings, **8,576 (78%) are `exact`**
 (median accuracy ~21 m): on Booking, ~2,800 from geocoded street addresses plus
-~1,700 already on a precise platform coordinate; on Airbnb, **~2,600 expose their
-own exact location** (radius-0) and **~1,400** fuzzed ones are de-fuzzed via a
+~1,700 already on a precise platform coordinate; on Airbnb, **~3,000 expose their
+own exact location** (radius-0) and **~1,000** fuzzed ones are de-fuzzed via a
 Booking twin. The remaining ~22% stay `approximate` (fuzzed
 Airbnb with no twin / radius not captured, or un-geocodable Booking). Map/exports
 use `latitude_best`/`longitude_best`. Address cleaning resolves ~78% of Booking
 addresses (`--regeocode` re-tries failures); the Airbnb radius is captured for
-~98% of listings (`--capture-airbnb-radius`, re-run to retry blocks), ~60 persistent.
+**~99%** of listings (6,122/6,185; `--capture-airbnb-radius`, re-run to retry blocks),
+**63 persistent blocks**.
 
 ### Position hierarchy — how sources are ranked and fused
 
@@ -507,10 +532,10 @@ identity.
 
 **Reasonable claims** (with the right hedging):
 
-- ✅ "Around **4,500 listings** in Bucharest across Booking and Airbnb are
+- ✅ "Around **4,600 listings** in Bucharest across Booking and Airbnb are
   operated by parties the platforms classify as professional businesses." —
   classification has residual error (§13) and unclassified rows exist.
-- ✅ "Of the **~8,000 distinct properties** identified, a substantial share are
+- ✅ "Of the **~8,036 distinct properties** identified, a substantial share are
   run by professional operators rather than individual hosts." — "~" and
   "identified" are doing real work, and the estimate is method-dependent (§6, §7).
 - ✅ "One operator, STRE Asset Management, is attached to around 320 listings." —
@@ -562,7 +587,7 @@ rendered the signal — Airbnb anti-bot blocking, **not** a synonym for
 
 - **Denominator unknown** — cannot prove the dataset is every Bucharest listing (§5).
 - **Price gaps** — ~35% of Booking listings have no price; genuinely unbookable on tested dates (§5, §10).
-- **Coordinates** — mixed as-scraped: Booking is street-or-better, ~48% of Airbnb expose an exact location (`mapMarkerRadiusInMeters=0`), the rest are ~150 m fuzz. Curation lifts **~78% to `exact`** (~21 m median) via geocoding + Airbnb's radius tag + cross-platform/temporal fusion; ~22% stay `approximate`. Map only `exact` rows; `platform_precision` says what the platform itself disclosed (§8).
+- **Coordinates** — mixed as-scraped: Booking is street-or-better, ~49% of Airbnb expose an exact location (`mapMarkerRadiusInMeters=0`), the rest are ~150 m fuzz. Curation lifts **~78% to `exact`** (~21 m median) via geocoding + Airbnb's radius tag + cross-platform/temporal fusion; ~22% stay `approximate`. Map only `exact` rows; `platform_precision` says what the platform itself disclosed (§8).
 - **Some gaps are genuinely unrecoverable, not extraction misses** — re-fetching already-enriched listings yields ~nothing: Airbnb partial-room counts (~354 missing bathrooms) and host stats (`host_response_rate` ~657, `host_join_date` ~885) simply aren't on those pages; Booking `max_guests`/`business_vat` are never exposed. Don't re-scrape to chase them.
 - **Dedup is an estimate, bracketed both ways** — the layered method merges more aggressively than the old strict-1:1 (~8,000 vs ~9,400 distinct properties); Tier-1 can over-merge an operator's similar nearby units, Airbnb fuzz can miss twins (§7).
 - **Business data is unverified** — not checked against ONRC/VIES (§9).
@@ -570,6 +595,17 @@ rendered the signal — Airbnb anti-bot blocking, **not** a synonym for
 - **Airbnb `Unknown` (2)** — anti-bot blocking; recovered to near-zero by retry passes (1,771 → 301 → 2); not "individual" (§13).
 - **~28 cross-platform groups disagree > 1 km** on position — flagged in `dedup_metrics.json`; positions not transferred across them (§8).
 - **Self-reported everything** — names, prices, registration numbers, host stats are all what the host entered and the platform displayed.
+
+---
+
+## Sources & related work
+
+- [DSA Article 30](https://www.eu-digital-services-act.com/Digital_Services_Act_Article_30.html) — the EU provision that requires online marketplaces to collect and display trader identity on each listing; grounds the legal basis for capturing business-disclosure fields.
+- [EU Regulation 2024/1028](https://eur-lex.europa.eu/eli/reg/2024/1028/oj/eng) — short-term rental data-transparency regulation applicable from 20 May 2026; adds per-unit registration number and monthly platform data-sharing requirements.
+- [Romania STR registration (Romania Insider)](https://www.romania-insider.com/apartment-rent-airbnb-romania-registration) — summary of Romania's Ministry-of-Tourism classification certificate requirement and ANAF scrutiny of approximately 23,000 hosts.
+- [Airbnb "Precise location" vs "Approximate location" help page](https://www.airbnb.com/help/article/2141) — Airbnb's own documentation of the host privacy choice reflected in `mapMarkerRadiusInMeters`; grounds the radius-0 = exact interpretation in §8.
+- [Inside Airbnb data assumptions](https://insideairbnb.com/data-assumptions/) — documents Airbnb's ~150 m fuzz and individual-building coordinate scatter; grounds the comparison of deduplication approaches in §7 and the fuzz discussion in §8.
+- [Wilson & Sherbin 2018 — "A Host of Troubles"](https://techscience.org/a/2018100902/) — Harvard study finding 94% re-identification of Airbnb hosts from their fuzzed coordinates; context for why cross-platform de-fuzzing is feasible and a privacy caveat on `approximate` rows (§8).
 
 ---
 
