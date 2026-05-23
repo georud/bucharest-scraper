@@ -45,3 +45,18 @@ def test_clean_address_handles_residual_noise():
     assert extract_booking_address(_bk("Prelungirea Ghencea 94-100")) == "Prelungirea Ghencea 94, Bucuresti"
     # A bare trailing street number must NOT be stripped as a block code.
     assert extract_booking_address(_bk("Strada Lipscani, 5")) == "Strada Lipscani, 5, Bucuresti"
+
+
+def test_classify_airbnb_radius():
+    # mapMarkerRadiusInMeters == 0 -> exact location, small sigma
+    prec, sigma = classify_scraped_precision(
+        {"platform": "airbnb", "airbnb_location_radius_m": 0.0}, stack_count=1)
+    assert prec == "exact" and sigma <= 20
+    # radius > 0 -> approximate, sigma at least the airbnb default
+    prec, sigma = classify_scraped_precision(
+        {"platform": "airbnb", "airbnb_location_radius_m": 152.0}, stack_count=1)
+    assert prec == "approximate" and sigma >= 100
+    # radius not captured -> approximate, default 100
+    _, sigma = classify_scraped_precision(
+        {"platform": "airbnb", "airbnb_location_radius_m": None}, stack_count=1)
+    assert sigma == 100.0

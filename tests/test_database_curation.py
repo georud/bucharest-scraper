@@ -128,3 +128,26 @@ def test_clear_failed_geocodes_keeps_ok(db):
     assert db.get_geocode("addr_ok") is not None
     assert db.get_geocode("addr_nf") is None
     assert db.get_geocode("addr_fail") is None
+
+
+def test_airbnb_radius_capture_and_missing(db):
+    _mk(db, "airbnb_r1", Platform.AIRBNB, "R1", 44.43, 26.10, url="https://www.airbnb.com/rooms/r1")
+    _mk(db, "airbnb_r2", Platform.AIRBNB, "R2", 44.44, 26.11, url="https://www.airbnb.com/rooms/r2")
+    assert {m["id"] for m in db.get_airbnb_listings_missing_radius()} == {"airbnb_r1", "airbnb_r2"}
+    assert all(m["url"] for m in db.get_airbnb_listings_missing_radius())
+    db.set_airbnb_location_radius({"airbnb_r1": 0.0})
+    assert {m["id"] for m in db.get_airbnb_listings_missing_radius()} == {"airbnb_r2"}
+    assert len(db.get_airbnb_listings_missing_radius(limit=1)) == 1
+
+
+def test_platform_precision_and_reset_keeps_radius(db):
+    _mk(db, "booking_pp", Platform.BOOKING, "B", 44.43, 26.10)
+    db.set_platform_precision({"booking_pp": "exact"})
+    db.set_airbnb_location_radius({"booking_pp": 0.0})
+    assert db.conn.execute(
+        "SELECT platform_precision FROM listings WHERE id='booking_pp'").fetchone()[0] == "exact"
+    db.reset_curation_columns()
+    row = db.conn.execute(
+        "SELECT platform_precision, airbnb_location_radius_m FROM listings WHERE id='booking_pp'").fetchone()
+    assert row[0] is None    # platform_precision is curation-derived -> reset
+    assert row[1] == 0.0     # radius is scraper data -> preserved

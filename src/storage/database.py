@@ -138,6 +138,8 @@ class Database:
             ("location_source", "TEXT"),
             ("est_accuracy_m", "REAL"),
             ("position_confidence", "REAL"),
+            ("airbnb_location_radius_m", "REAL"),
+            ("platform_precision", "TEXT"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing:
@@ -760,6 +762,7 @@ class Database:
         "bedrooms", "beds", "bathrooms", "business_type",
         "business_registration_number", "business_phone", "business_email",
         "host_name", "host_id", "raw_json", "scraped_at",
+        "airbnb_location_radius_m",
     )
 
     def get_listings_for_curation(self) -> list[dict]:
@@ -792,7 +795,8 @@ class Database:
                  latitude_geocoded=NULL, longitude_geocoded=NULL,
                  latitude_best=NULL, longitude_best=NULL, geocoded_address=NULL,
                  location_precision=NULL, location_source=NULL,
-                 est_accuracy_m=NULL, position_confidence=NULL"""
+                 est_accuracy_m=NULL, position_confidence=NULL,
+                 platform_precision=NULL"""
         )
         self.conn.commit()
 
@@ -863,6 +867,43 @@ class Database:
         )
         self.conn.commit()
         return len(mapping)
+
+    def set_platform_precision(self, mapping: dict[str, str]) -> int:
+        """mapping: {listing_id: 'exact'|'approximate'}. The platform's OWN precision
+        for the scraped coordinate (distinct from the curated `location_precision`)."""
+        if not mapping:
+            return 0
+        self.conn.executemany(
+            "UPDATE listings SET platform_precision=? WHERE id=?",
+            [(p, lid) for lid, p in mapping.items()],
+        )
+        self.conn.commit()
+        return len(mapping)
+
+    def set_airbnb_location_radius(self, mapping: dict[str, float]) -> int:
+        """mapping: {listing_id: radius_m}. Airbnb `mapMarkerRadiusInMeters`
+        (0 = exact location). Scraper-captured; survives curation resets."""
+        if not mapping:
+            return 0
+        self.conn.executemany(
+            "UPDATE listings SET airbnb_location_radius_m=? WHERE id=?",
+            [(rad, lid) for lid, rad in mapping.items()],
+        )
+        self.conn.commit()
+        return len(mapping)
+
+    def get_airbnb_listings_missing_radius(self, limit: int | None = None) -> list[dict]:
+        """Airbnb listings without a captured location radius yet, as lightweight
+        records {id, platform_id, url} for the radius-capture pass."""
+        sql = ("SELECT id, platform_id, url FROM listings "
+               "WHERE platform = 'airbnb' AND airbnb_location_radius_m IS NULL "
+               "AND url IS NOT NULL")
+        params: tuple = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        rows = self.conn.execute(sql, params).fetchall()
+        return [{"id": r[0], "platform_id": r[1], "url": r[2]} for r in rows]
 
     def get_geocode(self, address_norm: str) -> dict | None:
         row = self.conn.execute(

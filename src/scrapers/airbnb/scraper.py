@@ -17,7 +17,7 @@ from ...grid.generator import GridCell
 from ...models.listing import Listing
 from ..base import BaseScraper
 from ..stats import ParseStats
-from .parser import parse_pyairbnb_results, parse_raw_api_results, extract_pagination_cursor, parse_detail_response, parse_business_modal, parse_airbnb_business_from_html
+from .parser import parse_pyairbnb_results, parse_raw_api_results, extract_pagination_cursor, parse_detail_response, parse_business_modal, parse_airbnb_business_from_html, extract_map_radius
 
 logger = logging.getLogger(__name__)
 
@@ -414,6 +414,95 @@ class AirbnbScraper(BaseScraper):
             len(enriched), len(listings),
         )
         return enriched
+
+    async def capture_location_radius(self, records: list[dict], db=None) -> dict[str, float]:
+        """Fetch each Airbnb PDP and capture `mapMarkerRadiusInMeters` (0 = exact
+        location, ~152 = fuzzed). `records` are lightweight {id, platform_id, url}
+        dicts (from `Database.get_airbnb_listings_missing_radius`). Mirrors the
+        batched-browser + checkpoint pattern of `enrich_business_data`, but only
+        loads the page (no modal). Writes per batch via `db.set_airbnb_location_radius`.
+        Returns {listing_id: radius_m} for listings whose tag was found."""
+        if not records:
+            return {}
+        from playwright.async_api import async_playwright
+
+        timeout_ms = max(5, self.config.scraping.business_airbnb_timeout) * 1000
+        concurrency = max(1, self.config.scraping.business_airbnb_concurrency)
+        BATCH_SIZE = 500
+        radii: dict[str, float] = {}
+        logger.info("Airbnb location-radius capture: %d listings (batches of %d)",
+                    len(records), BATCH_SIZE)
+        pbar = tqdm(total=len(records), desc="Airbnb radius", unit="listing")
+        try:
+            for chunk_start in range(0, len(records), BATCH_SIZE):
+                chunk = records[chunk_start:chunk_start + BATCH_SIZE]
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True)
+                    try:
+                        context = await browser.new_context(
+                            viewport={"width": 1440, "height": 900},
+                            user_agent=(
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/131.0.0.0 Safari/537.36"
+                            ),
+                            locale="en-US",
+                        )
+                        sem = asyncio.Semaphore(concurrency)
+                        batch_radii: dict[str, float] = {}
+
+                        async def _one(rec: dict):
+                            async with sem:
+                                try:
+                                    radius = await self._fetch_map_radius(context, rec["url"], timeout_ms)
+                                except Exception as e:
+                                    logger.debug("Radius fetch failed for %s: %s", rec.get("platform_id"), e)
+                                    radius = None
+                                pbar.update(1)
+                                if radius is not None:
+                                    batch_radii[rec["id"]] = radius
+
+                        await asyncio.gather(*[_one(r) for r in chunk], return_exceptions=True)
+                        if db is not None and batch_radii:
+                            try:
+                                db.set_airbnb_location_radius(batch_radii)
+                            except Exception as e:
+                                logger.warning("Radius checkpoint failed: %s", e)
+                        radii.update(batch_radii)
+                    finally:
+                        try:
+                            await browser.close()
+                        except Exception as e:
+                            logger.warning("Playwright browser close failed (non-fatal): %s", e)
+        finally:
+            pbar.close()
+        logger.info("Airbnb location-radius capture: captured radius for %d/%d listings",
+                    len(radii), len(records))
+        return radii
+
+    async def _fetch_map_radius(self, context, url: str, timeout_ms: int) -> float | None:
+        """Load a listing PDP and extract `mapMarkerRadiusInMeters`."""
+        page = await context.new_page()
+        try:
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            except Exception as e:
+                logger.debug("Navigation failed for %s: %s", url, e)
+                return None
+            try:
+                await page.wait_for_function(
+                    "() => document.documentElement.innerHTML.indexOf('mapMarkerRadiusInMeters') !== -1",
+                    timeout=12_000,
+                )
+            except Exception:
+                pass
+            html = await page.content()
+            return extract_map_radius(html)
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass
 
     async def _fetch_business_data(self, context, url: str, timeout_ms: int) -> dict | None:
         """Fetch Airbnb listing page + extract DSA `businessDetails` from Apollo state.

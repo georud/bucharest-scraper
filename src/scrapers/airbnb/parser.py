@@ -25,6 +25,19 @@ def _get_nested(d: dict, path: str, default=None):
     return current
 
 
+_MAP_RADIUS_RE = re.compile(r'"mapMarkerRadiusInMeters"\s*:\s*([0-9]+(?:\.[0-9]+)?)')
+
+
+def extract_map_radius(html: str | None) -> float | None:
+    """Airbnb's `mapMarkerRadiusInMeters` from a listing PDP — 0 means the host
+    exposes the *exact* location; ~152 is the standard ~150 m obfuscation circle.
+    Returns None if the tag isn't present (e.g. page didn't render / blocked)."""
+    if not html:
+        return None
+    m = _MAP_RADIUS_RE.search(html)
+    return float(m.group(1)) if m else None
+
+
 def parse_raw_api_results(
     raw_json: dict, grid_cell_id: str = "", stats: ParseStats | None = None
 ) -> list[Listing]:

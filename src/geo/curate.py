@@ -10,7 +10,7 @@ from ..dedup.validate import dedup_metrics
 from .fusion import Observation, fuse_observations, position_confidence
 from .geocode import Geocoder
 from .precision import (
-    classify_scraped_precision, extract_booking_address,
+    classify_scraped_precision, extract_booking_address, _is_street_level,
     SIGMA_GEOCODED,
 )
 
@@ -63,6 +63,7 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
     observations: list[tuple] = []
     fuse_inputs: dict[str, list[Observation]] = defaultdict(list)
     geocoded_map: dict[str, tuple] = {}
+    plat_prec_map: dict[str, str] = {}  # platform's OWN exact/approximate per listing
     geocode_discarded = 0
 
     def group_key(lid: str) -> str:
@@ -78,9 +79,12 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
                              "scraped", r["latitude"], r["longitude"], sigma))
         fuse_inputs[gk].append(Observation(lid, r["latitude"], r["longitude"], sigma, "scraped"))
 
-        if geocoder and r["platform"] == "booking":
+        # Platform-native precision: Booking from address detail, Airbnb from the
+        # mapMarkerRadiusInMeters tag (0 => exact). NULL when undetermined.
+        if r["platform"] == "booking":
             address = extract_booking_address(r.get("raw_json"))
-            if address:
+            plat_prec_map[lid] = "exact" if _is_street_level(address) else "approximate"
+            if geocoder and address:
                 hit = geocoder.geocode(address)
                 if hit:
                     drift = haversine_distance(r["latitude"], r["longitude"], hit[0], hit[1])
@@ -91,6 +95,10 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
                         fuse_inputs[gk].append(Observation(lid, hit[0], hit[1], geo_sigma, "geocoded"))
                     else:
                         geocode_discarded += 1
+        else:
+            radius = r.get("airbnb_location_radius_m")
+            if radius is not None:
+                plat_prec_map[lid] = "exact" if radius == 0 else "approximate"
 
     if geocode_discarded:
         logger.warning("Curation: discarded %d geocodes farther than %.0fm from the scraped point",
@@ -105,6 +113,7 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
 
     db.replace_position_observations(observations)
     db.set_geocoded(geocoded_map)
+    db.set_platform_precision(plat_prec_map)
 
     # 4a. Detect cross-platform groups whose Booking vs Airbnb observations
     #     disagree by more than the configured distance — a probable false link.

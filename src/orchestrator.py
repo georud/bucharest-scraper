@@ -180,6 +180,19 @@ class Orchestrator:
         metrics = run_curation(self.db, config=self.config, backfill_rows=backfill_rows)
         logger.info("Curation complete: %s", metrics)
 
+    async def capture_airbnb_radius(self, limit: int | None = None) -> None:
+        """Fetch Airbnb PDPs to capture `mapMarkerRadiusInMeters` (0 = exact
+        location) for listings that don't have it yet, up to `limit`. Curation
+        (run separately) then turns radius-0 listings into platform-exact positions."""
+        from .scrapers.airbnb.scraper import AirbnbScraper
+        records = self.db.get_airbnb_listings_missing_radius(limit)
+        if not records:
+            logger.info("Airbnb radius capture: no listings missing a radius")
+            return
+        logger.info("Airbnb radius capture: %d listings to fetch", len(records))
+        scraper = AirbnbScraper(self.config, self.proxy)
+        await scraper.capture_location_radius(records, db=self.db)
+
     async def _scrape_platform_booking(
         self, cells: list[GridCell], cell_map: dict[str, GridCell], run_id: int
     ):
@@ -585,6 +598,8 @@ def main():
     enrich_only = False
     curate_only = False
     regeocode = False
+    capture_radius = False
+    radius_limit = None
 
     args = sys.argv[1:]
     for i, arg in enumerate(args):
@@ -600,8 +615,24 @@ def main():
             curate_only = True
         elif arg == "--regeocode":
             regeocode = True
+        elif arg == "--capture-airbnb-radius":
+            capture_radius = True
+        elif arg == "--limit" and i + 1 < len(args):
+            radius_limit = int(args[i + 1])
 
     orchestrator.regeocode = regeocode
+
+    if capture_radius:
+        try:
+            asyncio.run(orchestrator.capture_airbnb_radius(radius_limit))
+            orchestrator._curate_geo_and_dedup()
+            export_csv(orchestrator.db)
+            export_geojson(orchestrator.db)
+            export_operators_csv(orchestrator.db)
+            build_map(orchestrator.db)
+        finally:
+            orchestrator.db.close()
+        return
 
     if curate_only:
         try:

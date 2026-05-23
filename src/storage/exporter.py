@@ -30,6 +30,7 @@ _EXPORT_COLUMNS = [
     "latitude_geocoded", "longitude_geocoded",
     "latitude_best", "longitude_best", "geocoded_address",
     "location_precision", "location_source", "est_accuracy_m", "position_confidence",
+    "platform_precision", "airbnb_location_radius_m",
     # Business / DSA disclosure
     "business_name", "business_registration_number", "business_vat",
     "business_address", "business_email", "business_phone",

@@ -8,6 +8,7 @@ SIGMA_GEOCODED = 25.0
 SIGMA_BOOKING_ADDRESS = 50.0
 SIGMA_VAGUE = 150.0
 SIGMA_AIRBNB = 100.0
+SIGMA_AIRBNB_EXACT = 15.0  # Airbnb mapMarkerRadiusInMeters==0 => exact coord (rounding limit)
 
 _STREET_RE = re.compile(
     r"^\d+\s|strada|str\.|calea|bulevardul|bd\.|soseaua|sos\.|aleea|bloc|apartament|ap\.",
@@ -80,4 +81,12 @@ def classify_scraped_precision(row: dict, stack_count: int, sigmas=None) -> tupl
         if _is_street_level(address) and stack_count < 3:
             return "approximate", s_booking
         return "approximate", s_vague
+    # Airbnb: mapMarkerRadiusInMeters==0 means the host exposes the exact location,
+    # so the scraped coordinate is precise; >0 is the obfuscation radius; NULL =
+    # not captured => fall back to the fuzzed default.
+    radius = row.get("airbnb_location_radius_m")
+    if radius is not None:
+        if radius == 0:
+            return "exact", SIGMA_AIRBNB_EXACT
+        return "approximate", max(s_airbnb, float(radius) * 0.7)
     return "approximate", s_airbnb
