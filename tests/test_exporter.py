@@ -58,6 +58,21 @@ def test_csv_map_columns_present_and_populated(db, tmp_path):
     assert all(r["map_latitude"] and r["map_longitude"] for r in rows)
 
 
+def test_geojson_has_map_source_and_geometry_from_map_coords(db, tmp_path):
+    import json
+    _mk(db, "airbnb_2", Platform.AIRBNB, 44.4330, 26.10, best=(44.4301, 26.1001))
+    db.conn.execute("UPDATE listings SET location_source='transferred_from_twin', "
+                    "location_precision='exact' WHERE id='airbnb_2'")
+    db.conn.commit()
+    path = export_geojson(db, output_path=tmp_path / "l.geojson")
+    feat = json.load(open(path, encoding="utf-8"))["features"][0]
+    assert feat["geometry"]["coordinates"] == [26.1001, 44.4301]
+    assert feat["properties"]["map_source"] == "transferred_from_twin"
+    assert feat["properties"]["map_precision"] == "exact"
+    assert feat["properties"]["map_latitude"] == 44.4301
+    assert "latitude" not in feat["properties"]
+
+
 from src.storage.exporter import export_dedup_metrics
 
 

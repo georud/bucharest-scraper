@@ -90,19 +90,18 @@ def export_geojson(db: Database, output_path: Path | None = None) -> Path:
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     path = output_path or EXPORTS_DIR / "listings.geojson"
 
+    select_sql, columns = _select_and_columns()
     rows = db.conn.execute(
-        f"SELECT {_EXPORT_SELECT} FROM listings "
+        f"SELECT {select_sql} FROM listings "
         "WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
         "ORDER BY platform, name"
     ).fetchall()
 
     features = []
     for row in rows:
-        props = dict(zip(_EXPORT_COLUMNS, row))
-        lat = props.get("latitude_best")
-        lat = lat if lat is not None else props.get("latitude")
-        lng = props.get("longitude_best")
-        lng = lng if lng is not None else props.get("longitude")
+        props = dict(zip(columns, row))
+        lng = props["map_longitude"]
+        lat = props["map_latitude"]
         props.pop("latitude", None)
         props.pop("longitude", None)
         # Coerce is_superhost to a proper boolean / None
