@@ -363,11 +363,47 @@ overwritten). It works as follows:
 (median accuracy ~21 m): on Booking, ~2,800 from geocoded street addresses plus
 ~1,700 already on a precise platform coordinate; on Airbnb, **~2,600 expose their
 own exact location** (radius-0) and **~1,400** fuzzed ones are de-fuzzed via a
-Booking twin. The remaining ~25% stay `approximate` (fuzzed
+Booking twin. The remaining ~22% stay `approximate` (fuzzed
 Airbnb with no twin / radius not captured, or un-geocodable Booking). Map/exports
 use `latitude_best`/`longitude_best`. Address cleaning resolves ~78% of Booking
 addresses (`--regeocode` re-tries failures); the Airbnb radius is captured for
 ~98% of listings (`--capture-airbnb-radius`, re-run to retry blocks), ~60 persistent.
+
+### Position hierarchy — how sources are ranked and fused
+
+Each candidate coordinate carries an uncertainty (σ); within a property group they
+are **inverse-variance fused** (smaller σ = more weight), not picked by strict
+priority. The σ ladder, most → least trusted:
+
+| Source | σ | Notes |
+|---|---:|---|
+| Airbnb radius-0 own coordinate | **15 m** | host exposed the exact location (`mapMarkerRadiusInMeters = 0`) — **pinned** |
+| Geocoded Booking address | **25 m** | Nominatim on the street address, drift-guarded ≤ 2 km |
+| Booking own coordinate, street-level | **50 m** | has a precise address, not a stacked centroid |
+| Fuzzed Airbnb | **~100 m** | radius not captured, or radius 152 → max(100, radius × 0.7) |
+| Vague Booking / ≥3-stacked centroid / radius-500 Airbnb | **150 m+** | "Sector 3"-type address, shared coordinate, or radius 500 (~350 m) |
+
+**Fusion** (`fuse_observations`): pool all of a group's observations (both
+platforms, scraped + geocoded, *and* prior captures), reject any > 1 km from the
+smallest-σ anchor, then inverse-variance average. The fused σ sets
+`location_precision` (`exact` ≤ 40 m, else `approximate`), `est_accuracy_m` and
+`position_confidence`. `location_source` is the dominant (smallest-σ)
+observation's origin: `geocoded_address`, `transferred_from_twin` (a twin's
+position won), or `platform_coord` (the listing's own coordinate won).
+
+**Two rules override the pure fusion:**
+- **radius-0 pin** — a radius-0 Airbnb fuses from its *own* observations only; the
+  host-exposed coordinate is ground truth and is never moved by a group/twin.
+- **> 1 km disagreement** — if a cross-platform group's Booking and Airbnb points
+  disagree by more than 1 km the link is treated as suspect: each member keeps its
+  own position (no transfer) and the group is flagged in `dedup_metrics.json`.
+
+Two consequences worth noting: a **Booking listing reaches `exact` only** when its
+address geocodes (σ 25) or a precise twin pulls the fused σ < 40 — on its own
+coordinate (σ 50) it stays `approximate`; and **Booking exposes no per-listing
+precision flag** (confirmed across the search payload and the detail page — unlike
+Airbnb's radius), so Booking coordinate precision is *inferred* from address detail
++ stacking rather than read from the platform.
 
 **How to use it:**
 - **Map / cite a point only where `location_precision = 'exact'`** (optionally
