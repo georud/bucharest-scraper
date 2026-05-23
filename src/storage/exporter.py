@@ -39,7 +39,31 @@ _EXPORT_COLUMNS = [
     "host_name", "host_id", "host_response_rate", "host_response_time", "host_join_date",
 ]
 
-_EXPORT_SELECT = ", ".join(_EXPORT_COLUMNS)
+# Derived "use this for a map" columns: one always-populated position + its
+# source/precision, from the curated best with a fallback to the raw scraped
+# coord. Reuses the COALESCE(latitude_best, latitude) rule map_builder.py plots,
+# so internal map and exports agree. Each entry is (column_name, sql_expression).
+_MAP_COLUMNS = [
+    ("map_latitude", "COALESCE(latitude_best, latitude)"),
+    ("map_longitude", "COALESCE(longitude_best, longitude)"),
+    ("map_source", "COALESCE(location_source, 'platform_coord')"),
+    ("map_precision", "COALESCE(location_precision, 'approximate')"),
+]
+
+
+def _select_and_columns() -> tuple[str, list[str]]:
+    """Return (sql_select_expr, column_names) with the derived map_* columns
+    inserted right after 'name'. One definition shared by both exporters."""
+    names: list[str] = []
+    exprs: list[str] = []
+    for col in _EXPORT_COLUMNS:
+        names.append(col)
+        exprs.append(col)
+        if col == "name":
+            for mname, mexpr in _MAP_COLUMNS:
+                names.append(mname)
+                exprs.append(f"{mexpr} AS {mname}")
+    return ", ".join(exprs), names
 
 
 def export_csv(db: Database, output_path: Path | None = None) -> Path:
@@ -47,13 +71,14 @@ def export_csv(db: Database, output_path: Path | None = None) -> Path:
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
     path = output_path or EXPORTS_DIR / "listings.csv"
 
+    select_sql, columns = _select_and_columns()
     rows = db.conn.execute(
-        f"SELECT {_EXPORT_SELECT} FROM listings ORDER BY platform, name"
+        f"SELECT {select_sql} FROM listings ORDER BY platform, name"
     ).fetchall()
 
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
-        writer.writerow(_EXPORT_COLUMNS)
+        writer.writerow(columns)
         writer.writerows(rows)
 
     logger.info("Exported %d listings to %s", len(rows), path)

@@ -34,6 +34,30 @@ def test_geojson_uses_best_coords_when_present(db, tmp_path):
     assert feat["geometry"]["coordinates"] == [26.1001, 44.4301]
 
 
+def test_csv_map_columns_present_and_populated(db, tmp_path):
+    # One curated row (best + source + precision), one uncurated (scraped only).
+    _mk(db, "booking_1", Platform.BOOKING, 44.43, 26.10, best=(44.4301, 26.1001))
+    db.conn.execute("UPDATE listings SET location_source='geocoded_address', "
+                    "location_precision='exact' WHERE id='booking_1'")
+    _mk(db, "airbnb_2", Platform.AIRBNB, 44.4330, 26.10)  # no best, uncurated
+    db.conn.commit()
+
+    path = export_csv(db, output_path=tmp_path / "l.csv")
+    with open(path, encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    by_id = {r["id"]: r for r in rows}
+
+    assert {"map_latitude", "map_longitude", "map_source", "map_precision"} <= set(rows[0].keys())
+    assert float(by_id["booking_1"]["map_latitude"]) == 44.4301
+    assert float(by_id["booking_1"]["map_longitude"]) == 26.1001
+    assert by_id["booking_1"]["map_source"] == "geocoded_address"
+    assert by_id["booking_1"]["map_precision"] == "exact"
+    assert float(by_id["airbnb_2"]["map_latitude"]) == 44.4330
+    assert by_id["airbnb_2"]["map_source"] == "platform_coord"
+    assert by_id["airbnb_2"]["map_precision"] == "approximate"
+    assert all(r["map_latitude"] and r["map_longitude"] for r in rows)
+
+
 from src.storage.exporter import export_dedup_metrics
 
 
