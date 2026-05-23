@@ -334,7 +334,7 @@ The **as-scraped** `latitude`/`longitude` are **not** a precise address:
   that radius — Airbnb jitters the point within ~150 m of the real address.
   [Inside Airbnb documents the same ~150 m fuzz plus individual-building
   scatter](https://insideairbnb.com/data-assumptions/). A Harvard study
-  ([Wilson & Sherbin 2018](https://techscience.org/a/2018100902/)) re-identified
+  ([Szanto & Mehta 2018](https://techscience.org/a/2018100902/)) re-identified
   hosts from their fuzzed Airbnb coordinates 94% of the time — context for why
   cross-platform de-fuzzing works in this pipeline — and a reminder that
   `approximate` rows still carry meaningful location signal. In this capture
@@ -605,7 +605,7 @@ rendered the signal — Airbnb anti-bot blocking, **not** a synonym for
 - [Romania STR registration (Romania Insider)](https://www.romania-insider.com/apartment-rent-airbnb-romania-registration) — summary of Romania's Ministry-of-Tourism classification certificate requirement and ANAF scrutiny of approximately 23,000 hosts.
 - [Airbnb "Precise location" vs "Approximate location" help page](https://www.airbnb.com/help/article/2141) — Airbnb's own documentation of the host privacy choice reflected in `mapMarkerRadiusInMeters`; grounds the radius-0 = exact interpretation in §8.
 - [Inside Airbnb data assumptions](https://insideairbnb.com/data-assumptions/) — documents Airbnb's ~150 m fuzz and individual-building coordinate scatter; grounds the comparison of deduplication approaches in §7 and the fuzz discussion in §8.
-- [Wilson & Sherbin 2018 — "A Host of Troubles"](https://techscience.org/a/2018100902/) — Harvard study finding 94% re-identification of Airbnb hosts from their fuzzed coordinates; context for why cross-platform de-fuzzing is feasible and a privacy caveat on `approximate` rows (§8).
+- [Szanto & Mehta 2018 — "A Host of Troubles"](https://techscience.org/a/2018100902/) — Harvard study finding 94% re-identification of Airbnb hosts from their fuzzed coordinates; context for why cross-platform de-fuzzing is feasible and a privacy caveat on `approximate` rows (§8).
 
 ---
 
