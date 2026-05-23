@@ -359,14 +359,15 @@ overwritten). It works as follows:
    said — so a fuzzed Airbnb listing fused to `exact` via a twin reads
    `location_precision=exact`, `platform_precision=approximate`.
 
-**Result (May 2026 capture):** of 10,982 listings, **8,501 (77%) are `exact`**
-(median accuracy ~21 m): ~3,900 from geocoded Booking addresses, ~2,500 Airbnb
-that expose their own exact location (radius-0), and ~2,100 fuzzed Airbnb
-de-fuzzed via a Booking twin. The remaining ~25% stay `approximate` (fuzzed
+**Result (May 2026 capture):** of 10,982 listings, **8,582 (78%) are `exact`**
+(median accuracy ~21 m): on Booking, ~2,800 from geocoded street addresses plus
+~1,700 already on a precise platform coordinate; on Airbnb, **~2,600 expose their
+own exact location** (radius-0) and **~1,400** fuzzed ones are de-fuzzed via a
+Booking twin. The remaining ~25% stay `approximate` (fuzzed
 Airbnb with no twin / radius not captured, or un-geocodable Booking). Map/exports
 use `latitude_best`/`longitude_best`. Address cleaning resolves ~78% of Booking
 addresses (`--regeocode` re-tries failures); the Airbnb radius is captured for
-~93% of listings (`--capture-airbnb-radius`, re-run to retry blocks), ~400 persistent.
+~98% of listings (`--capture-airbnb-radius`, re-run to retry blocks), ~60 persistent.
 
 **How to use it:**
 - **Map / cite a point only where `location_precision = 'exact'`** (optionally
@@ -525,7 +526,7 @@ rendered the signal — Airbnb anti-bot blocking, **not** a synonym for
 
 - **Denominator unknown** — cannot prove the dataset is every Bucharest listing (§5).
 - **Price gaps** — ~35% of Booking listings have no price; genuinely unbookable on tested dates (§5, §10).
-- **Coordinates** — mixed as-scraped: Booking is street-or-better, ~48% of Airbnb expose an exact location (`mapMarkerRadiusInMeters=0`), the rest are ~150 m fuzz. Curation lifts **~77% to `exact`** (~21 m median) via geocoding + Airbnb's radius tag + cross-platform/temporal fusion; ~23% stay `approximate`. Map only `exact` rows; `platform_precision` says what the platform itself disclosed (§8).
+- **Coordinates** — mixed as-scraped: Booking is street-or-better, ~48% of Airbnb expose an exact location (`mapMarkerRadiusInMeters=0`), the rest are ~150 m fuzz. Curation lifts **~78% to `exact`** (~21 m median) via geocoding + Airbnb's radius tag + cross-platform/temporal fusion; ~22% stay `approximate`. Map only `exact` rows; `platform_precision` says what the platform itself disclosed (§8).
 - **Some gaps are genuinely unrecoverable, not extraction misses** — re-fetching already-enriched listings yields ~nothing: Airbnb partial-room counts (~354 missing bathrooms) and host stats (`host_response_rate` ~657, `host_join_date` ~885) simply aren't on those pages; Booking `max_guests`/`business_vat` are never exposed. Don't re-scrape to chase them.
 - **Dedup is an estimate, bracketed both ways** — the layered method merges more aggressively than the old strict-1:1 (~8,000 vs ~9,400 distinct properties); Tier-1 can over-merge an operator's similar nearby units, Airbnb fuzz can miss twins (§7).
 - **Business data is unverified** — not checked against ONRC/VIES (§9).
