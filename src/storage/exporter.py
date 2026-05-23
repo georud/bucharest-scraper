@@ -66,6 +66,9 @@ def _select_and_columns() -> tuple[str, list[str]]:
     return ", ".join(exprs), names
 
 
+assert "name" in _EXPORT_COLUMNS, "_select_and_columns expects a 'name' column to anchor the map_* insertion"
+
+
 def export_csv(db: Database, output_path: Path | None = None) -> Path:
     """Export all listings to CSV with every captured field."""
     EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -108,6 +111,7 @@ def export_geojson(db: Database, output_path: Path | None = None) -> Path:
         sh = props.get("is_superhost")
         if sh is not None:
             props["is_superhost"] = bool(sh)
+        # map_latitude/longitude kept in properties (besides geometry) for tabular consumers
         features.append({
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [lng, lat]},

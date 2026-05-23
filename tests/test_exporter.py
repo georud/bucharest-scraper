@@ -3,7 +3,7 @@ from datetime import datetime
 
 from src.models.enums import Platform
 from src.models.listing import Listing
-from src.storage.exporter import export_csv, export_geojson
+from src.storage.exporter import export_csv, export_dedup_metrics, export_geojson
 
 
 def _mk(db, lid, platform, lat, lng, best=None):
@@ -48,6 +48,9 @@ def test_csv_map_columns_present_and_populated(db, tmp_path):
     by_id = {r["id"]: r for r in rows}
 
     assert {"map_latitude", "map_longitude", "map_source", "map_precision"} <= set(rows[0].keys())
+    header = list(rows[0].keys())   # DictReader preserves order
+    ni = header.index("name")
+    assert header[ni+1:ni+5] == ["map_latitude", "map_longitude", "map_source", "map_precision"]
     assert float(by_id["booking_1"]["map_latitude"]) == 44.4301
     assert float(by_id["booking_1"]["map_longitude"]) == 26.1001
     assert by_id["booking_1"]["map_source"] == "geocoded_address"
@@ -71,9 +74,6 @@ def test_geojson_has_map_source_and_geometry_from_map_coords(db, tmp_path):
     assert feat["properties"]["map_precision"] == "exact"
     assert feat["properties"]["map_latitude"] == 44.4301
     assert "latitude" not in feat["properties"]
-
-
-from src.storage.exporter import export_dedup_metrics
 
 
 def test_export_dedup_metrics_writes_json(db, tmp_path):
