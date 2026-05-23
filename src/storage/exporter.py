@@ -39,34 +39,44 @@ _EXPORT_COLUMNS = [
     "host_name", "host_id", "host_response_rate", "host_response_time", "host_join_date",
 ]
 
-# Derived "use this for a map" columns: one always-populated position + its
-# source/precision, from the curated best with a fallback to the raw scraped
-# coord. Reuses the COALESCE(latitude_best, latitude) rule map_builder.py plots,
-# so internal map and exports agree. Each entry is (column_name, sql_expression).
-_MAP_COLUMNS = [
-    ("map_latitude", "COALESCE(latitude_best, latitude)"),
-    ("map_longitude", "COALESCE(longitude_best, longitude)"),
-    ("map_source", "COALESCE(location_source, 'platform_coord')"),
-    ("map_precision", "COALESCE(location_precision, 'approximate')"),
-]
+# Derived export columns, computed at export time (no DB schema change), keyed by
+# the existing column they're inserted right after:
+#   map_* — one always-populated canonical position + its source/precision, reusing
+#           the COALESCE(latitude_best, latitude) rule map_builder.py plots.
+#   address_raw — the FULL raw Booking property address (with bloc/scara/etaj) from
+#           raw_json; the unprocessed sibling of geocoded_address (the cleaned form
+#           we sent to the geocoder). NULL for Airbnb (no property address).
+_DERIVED_AFTER: dict[str, list[tuple[str, str]]] = {
+    "name": [
+        ("map_latitude", "COALESCE(latitude_best, latitude)"),
+        ("map_longitude", "COALESCE(longitude_best, longitude)"),
+        ("map_source", "COALESCE(location_source, 'platform_coord')"),
+        ("map_precision", "COALESCE(location_precision, 'approximate')"),
+    ],
+    "geocoded_address": [
+        ("address_raw", "COALESCE(json_extract(raw_json, '$.basicPropertyData.location.address'), "
+                        "json_extract(raw_json, '$.location.address'))"),
+    ],
+}
 
 
 def _select_and_columns() -> tuple[str, list[str]]:
-    """Return (sql_select_expr, column_names) with the derived map_* columns
-    inserted right after 'name'. One definition shared by both exporters."""
+    """Return (sql_select_expr, column_names) with derived columns inserted right
+    after their anchor column (see _DERIVED_AFTER). One definition shared by both
+    exporters: map_* after 'name', address_raw after 'geocoded_address'."""
     names: list[str] = []
     exprs: list[str] = []
     for col in _EXPORT_COLUMNS:
         names.append(col)
         exprs.append(col)
-        if col == "name":
-            for mname, mexpr in _MAP_COLUMNS:
-                names.append(mname)
-                exprs.append(f"{mexpr} AS {mname}")
+        for dname, dexpr in _DERIVED_AFTER.get(col, []):
+            names.append(dname)
+            exprs.append(f"{dexpr} AS {dname}")
     return ", ".join(exprs), names
 
 
-assert "name" in _EXPORT_COLUMNS, "_select_and_columns expects a 'name' column to anchor the map_* insertion"
+for _anchor in _DERIVED_AFTER:
+    assert _anchor in _EXPORT_COLUMNS, f"_select_and_columns expects '{_anchor}' to anchor a derived column"
 
 
 def export_csv(db: Database, output_path: Path | None = None) -> Path:

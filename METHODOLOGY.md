@@ -514,7 +514,8 @@ identity.
 | `cross_platform_group_id` | The subset of property groups that span both platforms (§7) | no cross-platform match |
 | `latitude_best`, `longitude_best` | **Fused best position — use these for mapping** (§8) | no coordinate at all |
 | `latitude_geocoded`, `longitude_geocoded` | Geocoded Booking street address (§8) | not geocoded / not Booking |
-| `geocoded_address` | The cleaned address string that was geocoded | as above |
+| `geocoded_address` | The cleaned address string that was geocoded (street + number, city) | not geocoded |
+| `address_raw` | The full raw Booking property address (with bloc/scara/etaj), from `raw_json` — export-only | not Booking / no address |
 | `location_precision` | `exact` (≤ ~40 m σ) / `approximate` (§8) | not curated |
 | `location_source` | `geocoded_address` / `transferred_from_twin` / `platform_coord` | not curated |
 | `est_accuracy_m` | Estimated position error in metres (fused σ) | not curated |

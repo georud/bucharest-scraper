@@ -76,6 +76,25 @@ def test_geojson_has_map_source_and_geometry_from_map_coords(db, tmp_path):
     assert "latitude" not in feat["properties"]
 
 
+def test_csv_includes_raw_and_geocoded_address(db, tmp_path):
+    # Full raw property address (with bloc/scara/etaj) alongside the cleaned form we geocoded.
+    _mk(db, "booking_1", Platform.BOOKING, 44.43, 26.10)
+    db.conn.execute(
+        "UPDATE listings SET raw_json=?, geocoded_address=? WHERE id='booking_1'",
+        ('{"basicPropertyData":{"location":{"address":"36 Strada Moise Nicoara bloc D2, scara B",'
+         '"city":"Bucuresti"}}}', "36 Strada Moise Nicoara, Bucuresti"))
+    _mk(db, "airbnb_2", Platform.AIRBNB, 44.44, 26.11)  # no property address
+    db.conn.execute("UPDATE listings SET raw_json='{}' WHERE id='airbnb_2'")
+    db.conn.commit()
+
+    path = export_csv(db, output_path=tmp_path / "l.csv")
+    by_id = {r["id"]: r for r in csv.DictReader(open(path, encoding="utf-8-sig"))}
+    assert {"address_raw", "geocoded_address"} <= set(by_id["booking_1"].keys())
+    assert by_id["booking_1"]["address_raw"] == "36 Strada Moise Nicoara bloc D2, scara B"  # full raw
+    assert by_id["booking_1"]["geocoded_address"] == "36 Strada Moise Nicoara, Bucuresti"   # cleaned
+    assert by_id["airbnb_2"]["address_raw"] == ""   # Airbnb has no property address
+
+
 def test_export_dedup_metrics_writes_json(db, tmp_path):
     path = export_dedup_metrics({"precision_proxy": 0.97, "conflict_groups": []},
                                 output_path=tmp_path / "m.json")
