@@ -44,34 +44,16 @@ def build_map(db: Database, output_path: Path | None = None) -> Path:
     booking_cluster = MarkerCluster(name="Booking.com", show=True)
     airbnb_cluster = MarkerCluster(name="Airbnb", show=True)
 
-    rows = db.conn.execute("""
-        SELECT platform, platform_id, name, latitude, longitude, property_type,
-               star_rating, review_score, review_count, price_per_night, currency,
-               url, thumbnail_url, bedrooms, beds, bathrooms, max_guests,
-               is_superhost, grid_cell_id, scraped_at,
-               business_name, business_registration_number, business_vat,
-               business_address, business_email, business_phone,
-               business_type, business_country, business_trade_register_name,
-               host_name, host_id, host_response_rate, host_response_time, host_join_date,
-               COALESCE(latitude_best, latitude) AS lat_plot,
-               COALESCE(longitude_best, longitude) AS lng_plot,
-               location_precision, position_confidence, location_source
-        FROM listings
-        WHERE latitude != 0 AND longitude != 0
-    """).fetchall()
-
-    cols = [
-        "platform", "platform_id", "name", "latitude", "longitude", "property_type",
-        "star_rating", "review_score", "review_count", "price_per_night", "currency",
-        "url", "thumbnail_url", "bedrooms", "beds", "bathrooms", "max_guests",
-        "is_superhost", "grid_cell_id", "scraped_at",
-        "business_name", "business_registration_number", "business_vat",
-        "business_address", "business_email", "business_phone",
-        "business_type", "business_country", "business_trade_register_name",
-        "host_name", "host_id", "host_response_rate", "host_response_time", "host_join_date",
-        "lat_plot", "lng_plot",
-        "location_precision", "position_confidence", "location_source",
-    ]
+    # Pull EVERY exported column (incl. the derived map_* position) via the same
+    # shared definition the CSV/GeoJSON exporters use, so the map shows the full
+    # record. Plotting uses map_latitude/map_longitude (= COALESCE(best, scraped)).
+    from ..storage.exporter import _select_and_columns
+    select_sql, cols = _select_and_columns()
+    rows = db.conn.execute(
+        f"SELECT {select_sql} FROM listings "
+        "WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
+        "AND latitude != 0 AND longitude != 0"
+    ).fetchall()
 
     booking_count = 0
     airbnb_count = 0
@@ -84,7 +66,7 @@ def build_map(db: Database, output_path: Path | None = None) -> Path:
             or PLATFORM_COLORS.get(r["platform"], "gray")
 
         marker = folium.Marker(
-            location=[r["lat_plot"], r["lng_plot"]],
+            location=[r["map_latitude"], r["map_longitude"]],
             popup=folium.Popup(popup_html, max_width=420),
             tooltip=f"{r['name']} · {r['platform']}",
             icon=folium.Icon(color=color, icon="info-sign"),
@@ -146,7 +128,8 @@ def _build_popup(r: dict) -> str:
 
     # Header
     parts = [
-        '<div style="font-family:sans-serif;font-size:12px;line-height:1.4;max-width:400px;">',
+        '<div style="font-family:sans-serif;font-size:12px;line-height:1.4;max-width:400px;'
+        'max-height:360px;overflow-y:auto;padding-right:4px;">',
         f'<div style="font-size:14px;font-weight:600;margin-bottom:2px;">{name}</div>',
         f'<div style="color:#888;margin-bottom:6px;">{platform}'
     ]
@@ -196,16 +179,34 @@ def _build_popup(r: dict) -> str:
     if room_bits:
         parts.append(f'<div style="color:#333;margin-bottom:8px;">{" · ".join(room_bits)}</div>')
 
-    # Location
-    loc_table = []
-    loc_table.append(_row("Coords", f'{r["lat_plot"]:.5f}, {r["lng_plot"]:.5f}'))
-    loc_table.append(_row("Cell", r["grid_cell_id"]))
-    # Location precision line
+    # Location, precision & dedup — every geo / identity field.
+    def _coord(a, b):
+        try:
+            return f'{float(r[a]):.5f}, {float(r[b]):.5f}'
+        except (TypeError, ValueError, KeyError):
+            return None
     precision = r.get("location_precision") or "unverified"
     conf = r.get("position_confidence")
     source = r.get("location_source") or "platform_coord"
-    precision_val = precision + (f" (confidence {conf:.2f}, via {source})" if conf is not None else "")
-    loc_table.append(_row("Location", precision_val))
+    accuracy = r.get("est_accuracy_m")
+    radius = r.get("airbnb_location_radius_m")
+    loc_table = [
+        _row("Coords", _coord("map_latitude", "map_longitude")),
+        _row("Location", precision + (f" (confidence {conf:.2f}, via {source})" if conf is not None else "")),
+        _row("Accuracy", None if accuracy is None else f'{float(accuracy):.0f} m'),
+        _row("Map source", r.get("map_source")),
+        _row("Map precision", r.get("map_precision")),
+        _row("Platform precision", r.get("platform_precision")),
+        _row("Airbnb map radius", None if radius is None else f'{float(radius):.0f} m'),
+        _row("Scraped coords", _coord("latitude", "longitude")),
+        _row("Best coords", _coord("latitude_best", "longitude_best")),
+        _row("Geocoded coords", _coord("latitude_geocoded", "longitude_geocoded")),
+        _row("Geocoded address", r.get("geocoded_address")),
+        _row("H3 cell", r.get("grid_cell_id")),
+        _row("Operator id", r.get("operator_id")),
+        _row("Property group", r.get("property_group_id")),
+        _row("Cross-platform group", r.get("cross_platform_group_id")),
+    ]
     loc_rows = "".join(x for x in loc_table if x)
     if loc_rows:
         parts.append(
@@ -264,6 +265,19 @@ def _build_popup(r: dict) -> str:
             '<table style="border-collapse:collapse;font-size:11px;width:100%;">'
             + biz_rows +
             '</table></div>'
+        )
+
+    # Provenance / extra (ids + first-seen + original price)
+    prov_rows = "".join(x for x in [
+        _row("Listing id", r.get("id")),
+        _row("First seen", None if not r.get("first_seen_at") else str(r["first_seen_at"])[:16]),
+        _row("Original price", None if r.get("price_original") is None
+             else f'{_esc(r.get("currency_original") or "")} {float(r["price_original"]):.0f}'),
+    ] if x)
+    if prov_rows:
+        parts.append(
+            '<table style="border-collapse:collapse;font-size:11px;margin-bottom:6px;width:100%;">'
+            + prov_rows + '</table>'
         )
 
     # Scraped-at + listing link
