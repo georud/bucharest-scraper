@@ -158,17 +158,24 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
             "location_precision": "exact" if fused.sigma_m <= exact_max else "approximate",
         }
 
+    def _is_radius0(lid: str) -> bool:
+        r = by_id.get(lid)
+        return r is not None and r.get("airbnb_location_radius_m") == 0
+
     for gk, obs in fuse_inputs.items():
         members = members_by_key.get(gk, [])
-        if gk in geo_conflict_set:
-            for lid in members:
+        group_fused = None if gk in geo_conflict_set else fuse_observations(obs)
+        for lid in members:
+            # A radius-0 listing (the host exposed the EXACT location) or a member
+            # of a flagged disagreeing group fuses from its OWN observations only —
+            # never the shared group average, which could move a known-exact point
+            # off it or relabel it as a twin transfer.
+            if group_fused is None or _is_radius0(lid):
                 own = [o for o in obs if o.listing_id == lid]
                 if own:
                     _record(lid, fuse_observations(own), transferred=False)
-        else:
-            fused = fuse_observations(obs)
-            for lid in members:
-                _record(lid, fused, transferred=(fused.dominant_listing_id != lid))
+            else:
+                _record(lid, group_fused, transferred=(group_fused.dominant_listing_id != lid))
     db.set_fused_positions(fused_map)
 
     # 5. Verification (exclude identity/operator-derived groups to avoid circularity)

@@ -37,6 +37,25 @@ def test_run_curation_links_twin_and_improves_airbnb_position(db):
     assert metrics["identity_twins_grouped"] == 1
 
 
+def test_run_curation_pins_radius0_airbnb_to_own_coord(db):
+    # Radius-0 Airbnb (host exposed the EXACT location) + a Booking twin ~330 m
+    # away. The airbnb must KEEP its own exact coord, not be averaged toward the twin.
+    _mk(db, "booking_1", Platform.BOOKING, "Central Studio", 44.4300, 26.1000,
+        business_phone="0721000999",
+        raw_json='{"location":{"address":"5 Strada Lipscani","city":"Bucuresti"}}')
+    _mk(db, "airbnb_2", Platform.AIRBNB, "Cozy Downtown", 44.4330, 26.1000,
+        business_phone="+40721000999")
+    db.set_airbnb_location_radius({"airbnb_2": 0.0})  # host exposes exact location
+    run_curation(db, fetch_fn=lambda q: [{"lat": "44.4301", "lon": "26.1001", "category": "building"}])
+    lat_best, src, prec, pp = db.conn.execute(
+        "SELECT latitude_best, location_source, location_precision, platform_precision "
+        "FROM listings WHERE id='airbnb_2'").fetchone()
+    assert abs(lat_best - 44.4330) < 0.0005   # kept its OWN exact coord, not pulled to ~44.4301
+    assert src == "platform_coord"            # not transferred_from_twin
+    assert prec == "exact"
+    assert pp == "exact"                      # platform_precision derived from radius 0
+
+
 def test_run_curation_flags_cross_platform_disagreement(db):
     # Same unique phone (Tier-0 link) but ~8 km apart -> linked, flagged, and NOT position-transferred.
     _mk(db, "booking_1", Platform.BOOKING, "Flat", 44.4300, 26.1000, business_phone="0722000222")
