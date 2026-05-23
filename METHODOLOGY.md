@@ -47,7 +47,7 @@ of this document explains both):
 | With full company disclosure captured | 1,932 | 2,547 | 4,479 |
 | Distinct operators identified | — | — | 3,151 |
 
-This capture (21–22 May 2026) is a snapshot taken days after [EU Regulation 2024/1028](https://eur-lex.europa.eu/eli/reg/2024/1028/oj/eng) on short-term-rental data transparency became applicable (20 May 2026) and amid Romania's ongoing registration crackdown, making the trader and registration layer particularly timely.
+The **current** capture — 21–22 May 2026, the figures used in §6–§8 and §12 — lands days after [EU Regulation 2024/1028](https://eur-lex.europa.eu/eli/reg/2024/1028/oj/eng) on short-term-rental data transparency became applicable (20 May 2026). That timing, with Romania's ongoing registration crackdown, makes the trader and registration layer especially timely.
 
 One **row = one platform listing**. A row is *not* a property and *not* an
 operator — see §6, the most important section for anyone counting things.
@@ -282,7 +282,7 @@ written so correct counts are possible.
 key — registration number, phone, or email — are unioned into one operator
 (union-find; safe, because a shared registration/phone genuinely is one operator,
 unlike GPS+name). This **fixes** the old un-normalised-key problem: the "STR" /
-"STRE Asset Management" variants now collapse into a single operator of **313
+"STRE Asset Management" variants now collapse into a single operator of **321
 listings** across both platforms. May 2026: 859 operators carry an `operator_id`,
 103 of them with 10+ listings.
 
@@ -317,7 +317,7 @@ the CUI, Airbnb the trade-register J-number) — so the "conflicts" it flags are
 actually correct matches the identity check can't confirm, not bad merges. See
 `data/exports/dedup_metrics.json` and `dedup_review.csv`.
 
-Unlike [Inside Airbnb](https://insideairbnb.com/data-assumptions/), which links records only by Airbnb listing id, this pipeline layers in operator union-find over shared identity keys and cross-platform property grouping — matching the same physical unit across Booking and Airbnb even when titles and coordinates differ.
+Unlike [Inside Airbnb](https://insideairbnb.com/data-assumptions/), which links records by Airbnb listing id alone, this pipeline also resolves operators (by shared registration/phone/email) and groups the same physical flat across platforms — see above.
 
 ---
 
@@ -328,15 +328,15 @@ The **as-scraped** `latitude`/`longitude` are **not** a precise address:
 - **Airbnb obfuscates *some* listings, not all.** The listing page carries
   `mapMarkerRadiusInMeters`, which directly reflects the host's
   [**"Precise location" vs "Approximate location"**](https://www.airbnb.com/help/article/2141)
-  privacy choice in their settings. `0` = **Precise**: the coordinate IS the
-  true point (only the street number is withheld until booking). `~152` (or
-  `500`) = **Approximate**: the unit sits somewhere within a shaded circle of
+  privacy choice in their settings. `0` = **Precise**: the coordinate is the
+  true point — accurate to building level; only the street number is withheld
+  until booking. `~152` (or `500`) = **Approximate**: the unit sits somewhere within a shaded circle of
   that radius — Airbnb jitters the point within ~150 m of the real address.
   [Inside Airbnb documents the same ~150 m fuzz plus individual-building
   scatter](https://insideairbnb.com/data-assumptions/). A Harvard study
   ([Wilson & Sherbin 2018](https://techscience.org/a/2018100902/)) re-identified
   hosts from their fuzzed Airbnb coordinates 94% of the time — context for why
-  cross-platform de-fuzzing works in this pipeline AND a reminder that
+  cross-platform de-fuzzing works in this pipeline — and a reminder that
   `approximate` rows still carry meaningful location signal. In this capture
   Airbnb's radius was retrieved for **6,122 of 6,185 listings (~99%)**; **63
   blocked**. Of those captured, **2,978 (~49%) are radius-0 (exact)**. The tag
