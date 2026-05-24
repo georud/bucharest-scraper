@@ -410,11 +410,19 @@ priority. The σ ladder, most → least trusted:
 
 **Fusion** (`fuse_observations`): pool all of a group's observations (both
 platforms, scraped + geocoded, *and* prior captures), reject any > 1 km from the
-smallest-σ anchor, then inverse-variance average. The fused σ sets
-`location_precision` (`exact` ≤ 40 m, else `approximate`), `est_accuracy_m` and
-`position_confidence`. `location_source` is the dominant (smallest-σ)
-observation's origin: `geocoded_address`, `transferred_from_twin` (a twin's
-position won), or `platform_coord` (the listing's own coordinate won).
+smallest-σ anchor, then **inverse-variance average** — each weighted by `1/σ²`.
+The fused deviation is **`est_accuracy_m = 1 / √(Σ 1/σ²)`**, so agreeing
+observations shrink it (a geocode + a twin beat either alone). It sets
+`location_precision` (`exact` ≤ 40 m, else `approximate`) and `position_confidence`.
+`location_source` is the dominant (smallest-σ) observation's origin:
+`geocoded_address`, `transferred_from_twin` (a twin's position won), or
+`platform_coord` (the listing's own coordinate won).
+
+That formula assumes the observations are **independent** — which co-located
+operator units (same building) and temporal repeats of one fuzzed listing are
+not. So the fused σ is **floored at ~10 m** (the 4-decimal coordinate-rounding
+cell at Bucharest's latitude); no position from this data is genuinely known
+better than that, and stacking non-independent points must not claim otherwise.
 
 **Two rules override the pure fusion:**
 - **radius-0 pin** — a radius-0 Airbnb fuses from its *own* observations only; the

@@ -9,6 +9,12 @@ _DEG_LAT_M = 111_320.0
 _DEG_LNG_M = 111_320.0 * math.cos(math.radians(_LAT0))  # ~79,545 m
 
 _OUTLIER_M = 1000.0
+# Floor on the fused sigma: inverse-variance fusion assumes independent
+# observations, but co-located units + temporal repeats of the same fuzzed
+# listing are not independent, so raw fusion over-shrinks sigma. ~10 m is the
+# 4-decimal coordinate-rounding cell at Bucharest's latitude — no position from
+# this data is genuinely known better than that.
+_MIN_SIGMA_M = 10.0
 
 
 @dataclass
@@ -45,12 +51,15 @@ def _weighted_mean(obs: list[Observation]) -> tuple[float, float, float]:
     return x, y, sigma
 
 
-def fuse_observations(observations: list[Observation], outlier_m: float = _OUTLIER_M) -> FusedPosition:
+def fuse_observations(observations: list[Observation], outlier_m: float = _OUTLIER_M,
+                      min_sigma_m: float = _MIN_SIGMA_M) -> FusedPosition:
     """Inverse-variance weighted fusion with >1 km outlier rejection.
 
     Outlier filter anchors on the highest-precision (smallest sigma) point so
     that a single distant observation cannot drag the initial mean far enough
-    to exclude the genuine cluster.
+    to exclude the genuine cluster. The fused sigma is floored at `min_sigma_m`
+    so stacking non-independent observations can't claim sub-coordinate-rounding
+    precision.
     """
     obs = [o for o in observations if o.sigma_m and o.sigma_m > 0]
     if not obs:
@@ -63,6 +72,7 @@ def fuse_observations(observations: list[Observation], outlier_m: float = _OUTLI
     if not kept:
         kept = obs
     x, y, sigma = _weighted_mean(kept)
+    sigma = max(sigma, min_sigma_m)  # don't claim sub-coordinate-rounding precision
     lat, lng = _to_geo(x, y)
 
     dominant = min(kept, key=lambda o: o.sigma_m)  # smallest sigma == largest weight
