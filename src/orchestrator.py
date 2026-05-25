@@ -180,18 +180,18 @@ class Orchestrator:
         metrics = run_curation(self.db, config=self.config, backfill_rows=backfill_rows)
         logger.info("Curation complete: %s", metrics)
 
-    async def capture_airbnb_radius(self, limit: int | None = None) -> None:
-        """Fetch Airbnb PDPs to capture `mapMarkerRadiusInMeters` (0 = exact
-        location) for listings that don't have it yet, up to `limit`. Curation
+    async def capture_airbnb_pdp_details(self, limit: int | None = None) -> None:
+        """Fetch Airbnb PDPs to capture `mapMarkerRadiusInMeters` AND amenities
+        for listings that don't have them yet, up to `limit`. Curation
         (run separately) then turns radius-0 listings into platform-exact positions."""
         from .scrapers.airbnb.scraper import AirbnbScraper
-        records = self.db.get_airbnb_listings_missing_radius(limit)
+        records = self.db.get_airbnb_listings_missing_pdp_details(limit)
         if not records:
-            logger.info("Airbnb radius capture: no listings missing a radius")
+            logger.info("Airbnb PDP capture: no listings missing PDP details")
             return
-        logger.info("Airbnb radius capture: %d listings to fetch", len(records))
+        logger.info("Airbnb PDP capture: %d listings to fetch", len(records))
         scraper = AirbnbScraper(self.config, self.proxy)
-        await scraper.capture_location_radius(records, db=self.db)
+        await scraper.capture_pdp_details(records, db=self.db)
 
     async def _scrape_platform_booking(
         self, cells: list[GridCell], cell_map: dict[str, GridCell], run_id: int
@@ -624,7 +624,7 @@ def main():
 
     if capture_radius:
         try:
-            asyncio.run(orchestrator.capture_airbnb_radius(radius_limit))
+            asyncio.run(orchestrator.capture_airbnb_pdp_details(radius_limit))
             orchestrator._curate_geo_and_dedup()
             export_csv(orchestrator.db)
             export_geojson(orchestrator.db)

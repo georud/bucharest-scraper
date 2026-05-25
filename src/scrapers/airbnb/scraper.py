@@ -17,7 +17,7 @@ from ...grid.generator import GridCell
 from ...models.listing import Listing
 from ..base import BaseScraper
 from ..stats import ParseStats
-from .parser import parse_pyairbnb_results, parse_raw_api_results, extract_pagination_cursor, parse_detail_response, parse_business_modal, parse_airbnb_business_from_html, extract_map_radius
+from .parser import parse_pyairbnb_results, parse_raw_api_results, extract_pagination_cursor, parse_detail_response, parse_business_modal, parse_airbnb_business_from_html, extract_map_radius, extract_amenities
 
 logger = logging.getLogger(__name__)
 
@@ -415,13 +415,14 @@ class AirbnbScraper(BaseScraper):
         )
         return enriched
 
-    async def capture_location_radius(self, records: list[dict], db=None) -> dict[str, float]:
-        """Fetch each Airbnb PDP and capture `mapMarkerRadiusInMeters` (0 = exact
-        location, ~152 = fuzzed). `records` are lightweight {id, platform_id, url}
-        dicts (from `Database.get_airbnb_listings_missing_radius`). Mirrors the
+    async def capture_pdp_details(self, records: list[dict], db=None) -> dict[str, float]:
+        """Fetch each Airbnb PDP and capture `mapMarkerRadiusInMeters` AND the
+        amenity list in one pass. `records` are lightweight {id, platform_id, url}
+        dicts (from `Database.get_airbnb_listings_missing_pdp_details`). Mirrors the
         batched-browser + checkpoint pattern of `enrich_business_data`, but only
-        loads the page (no modal). Writes per batch via `db.set_airbnb_location_radius`.
-        Returns {listing_id: radius_m} for listings whose tag was found."""
+        loads the page (no modal). Writes per batch via `db.set_airbnb_location_radius`
+        and `db.set_airbnb_amenities`.
+        Returns {listing_id: radius_m} for listings whose radius tag was found."""
         if not records:
             return {}
         from playwright.async_api import async_playwright
@@ -430,9 +431,10 @@ class AirbnbScraper(BaseScraper):
         concurrency = max(1, self.config.scraping.business_airbnb_concurrency)
         BATCH_SIZE = 500
         radii: dict[str, float] = {}
-        logger.info("Airbnb location-radius capture: %d listings (batches of %d)",
+        amen_count = 0
+        logger.info("Airbnb PDP details capture: %d listings (batches of %d)",
                     len(records), BATCH_SIZE)
-        pbar = tqdm(total=len(records), desc="Airbnb radius", unit="listing")
+        pbar = tqdm(total=len(records), desc="Airbnb PDP", unit="listing")
         try:
             for chunk_start in range(0, len(records), BATCH_SIZE):
                 chunk = records[chunk_start:chunk_start + BATCH_SIZE]
@@ -450,17 +452,20 @@ class AirbnbScraper(BaseScraper):
                         )
                         sem = asyncio.Semaphore(concurrency)
                         batch_radii: dict[str, float] = {}
+                        batch_amen: dict[str, str] = {}
 
                         async def _one(rec: dict):
                             async with sem:
                                 try:
-                                    radius = await self._fetch_map_radius(context, rec["url"], timeout_ms)
+                                    details = await self._fetch_pdp_details(context, rec["url"], timeout_ms)
                                 except Exception as e:
-                                    logger.debug("Radius fetch failed for %s: %s", rec.get("platform_id"), e)
-                                    radius = None
+                                    logger.debug("PDP fetch failed for %s: %s", rec.get("platform_id"), e)
+                                    details = {}
                                 pbar.update(1)
-                                if radius is not None:
-                                    batch_radii[rec["id"]] = radius
+                                if details.get("radius") is not None:
+                                    batch_radii[rec["id"]] = details["radius"]
+                                if details.get("amenities"):
+                                    batch_amen[rec["id"]] = json.dumps(details["amenities"])
 
                         await asyncio.gather(*[_one(r) for r in chunk], return_exceptions=True)
                         if db is not None and batch_radii:
@@ -468,7 +473,13 @@ class AirbnbScraper(BaseScraper):
                                 db.set_airbnb_location_radius(batch_radii)
                             except Exception as e:
                                 logger.warning("Radius checkpoint failed: %s", e)
+                        if db is not None and batch_amen:
+                            try:
+                                db.set_airbnb_amenities(batch_amen)
+                            except Exception as e:
+                                logger.warning("Amenities checkpoint failed: %s", e)
                         radii.update(batch_radii)
+                        amen_count += len(batch_amen)
                     finally:
                         try:
                             await browser.close()
@@ -476,19 +487,19 @@ class AirbnbScraper(BaseScraper):
                             logger.warning("Playwright browser close failed (non-fatal): %s", e)
         finally:
             pbar.close()
-        logger.info("Airbnb location-radius capture: captured radius for %d/%d listings",
-                    len(radii), len(records))
+        logger.info("Airbnb PDP details capture: radius for %d/%d, amenities for %d/%d listings",
+                    len(radii), len(records), amen_count, len(records))
         return radii
 
-    async def _fetch_map_radius(self, context, url: str, timeout_ms: int) -> float | None:
-        """Load a listing PDP and extract `mapMarkerRadiusInMeters`."""
+    async def _fetch_pdp_details(self, context, url: str, timeout_ms: int) -> dict:
+        """Load a listing PDP, return {"radius": float|None, "amenities": list[str]}."""
         page = await context.new_page()
         try:
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             except Exception as e:
                 logger.debug("Navigation failed for %s: %s", url, e)
-                return None
+                return {}
             try:
                 await page.wait_for_function(
                     "() => document.documentElement.innerHTML.indexOf('mapMarkerRadiusInMeters') !== -1",
@@ -497,7 +508,7 @@ class AirbnbScraper(BaseScraper):
             except Exception:
                 pass
             html = await page.content()
-            return extract_map_radius(html)
+            return {"radius": extract_map_radius(html), "amenities": extract_amenities(html)}
         finally:
             try:
                 await page.close()
