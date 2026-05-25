@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import defaultdict
 
 from rapidfuzz import fuzz
@@ -13,6 +14,38 @@ TIER1_RELAXED_DISTANCE_M = 250.0
 TIER1_NAME_THRESHOLD = 70.0
 TIER2_STRICT_DISTANCE_M = 100.0
 TIER2_NAME_THRESHOLD = 80.0
+
+AMENITY_JACCARD_MIN = 0.6
+
+
+def _amenity_set(row: dict) -> set[str]:
+    raw = row.get("amenities")
+    if not raw:
+        return set()
+    try:
+        return set(json.loads(raw))
+    except (ValueError, TypeError):
+        return set()
+
+
+def _jaccard(s1: set, s2: set) -> float:
+    if not s1 or not s2:
+        return 1.0           # unknown -> don't discriminate
+    return len(s1 & s2) / len(s1 | s2)
+
+
+def _same_platform_distinct(a: dict, b: dict, amenity_jaccard_min: float = AMENITY_JACCARD_MIN) -> bool:
+    """True if a and b are the SAME platform but demonstrably different units.
+    Cross-platform pairs are never distinct here (Booking exposes neither signal)."""
+    if a["platform"] != b["platform"]:
+        return False
+    amg, bmg = a.get("max_guests"), b.get("max_guests")
+    if amg is not None and bmg is not None and amg != bmg:
+        return True
+    sa, sb = _amenity_set(a), _amenity_set(b)
+    if sa and sb and _jaccard(sa, sb) < amenity_jaccard_min:
+        return True
+    return False
 
 
 def room_config_matches(a: dict, b: dict) -> bool:
@@ -49,10 +82,13 @@ def _identity_keys(row: dict) -> set[str]:
 def _compatible(a: dict, b: dict, relaxed: bool,
                 relaxed_dist: float = TIER1_RELAXED_DISTANCE_M,
                 strict_dist: float = TIER2_STRICT_DISTANCE_M,
-                strict_name: float = TIER2_NAME_THRESHOLD) -> bool:
+                strict_name: float = TIER2_NAME_THRESHOLD,
+                amenity_jaccard_min: float = AMENITY_JACCARD_MIN) -> bool:
     """Geographic + name (+ room-config) compatibility, used to guard group
     growth. Identity keys are deliberately NOT consulted here (operator-level);
     single-property identity linking is the Tier-0 candidate path."""
+    if _same_platform_distinct(a, b, amenity_jaccard_min):
+        return False
     dist = haversine_distance(a["latitude"], a["longitude"], b["latitude"], b["longitude"])
     if relaxed:
         return dist <= relaxed_dist and (
@@ -80,9 +116,10 @@ def assign_property_groups(rows, operator_map: dict[str, str], dedup_cfg=None):
     relaxed_dist = getattr(dedup_cfg, "operator_relaxed_distance_m", TIER1_RELAXED_DISTANCE_M)
     strict_dist = getattr(dedup_cfg, "strict_distance_m", TIER2_STRICT_DISTANCE_M)
     strict_name = getattr(dedup_cfg, "strict_name_threshold", TIER2_NAME_THRESHOLD)
+    amenity_jaccard_min = getattr(dedup_cfg, "amenity_jaccard_min", AMENITY_JACCARD_MIN)
 
     def compat(x, y, relaxed):
-        return _compatible(x, y, relaxed, relaxed_dist, strict_dist, strict_name)
+        return _compatible(x, y, relaxed, relaxed_dist, strict_dist, strict_name, amenity_jaccard_min)
 
     # ---- Tier 0: singleton identity across platforms ----
     key_to_booking: dict[str, list[str]] = defaultdict(list)
