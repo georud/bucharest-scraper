@@ -140,6 +140,7 @@ class Database:
             ("position_confidence", "REAL"),
             ("airbnb_location_radius_m", "REAL"),
             ("platform_precision", "TEXT"),
+            ("amenities", "TEXT"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing:
@@ -762,7 +763,7 @@ class Database:
         "bedrooms", "beds", "bathrooms", "business_type",
         "business_registration_number", "business_phone", "business_email",
         "host_name", "host_id", "raw_json", "scraped_at",
-        "airbnb_location_radius_m",
+        "airbnb_location_radius_m", "max_guests", "amenities",
     )
 
     def get_listings_for_curation(self) -> list[dict]:
@@ -892,18 +893,26 @@ class Database:
         self.conn.commit()
         return len(mapping)
 
-    def get_airbnb_listings_missing_radius(self, limit: int | None = None) -> list[dict]:
-        """Airbnb listings without a captured location radius yet, as lightweight
-        records {id, platform_id, url} for the radius-capture pass."""
-        sql = ("SELECT id, platform_id, url FROM listings "
-               "WHERE platform = 'airbnb' AND airbnb_location_radius_m IS NULL "
-               "AND url IS NOT NULL")
+    def set_airbnb_amenities(self, mapping: dict[str, str]) -> int:
+        """mapping: {listing_id: amenities_json}. JSON list of normalized titles."""
+        if not mapping:
+            return 0
+        self.conn.executemany("UPDATE listings SET amenities=? WHERE id=?",
+                              [(j, lid) for lid, j in mapping.items()])
+        self.conn.commit()
+        return len(mapping)
+
+    def get_airbnb_listings_missing_pdp_details(self, limit: int | None = None) -> list[dict]:
+        """Airbnb listings missing radius OR amenities (need a PDP fetch), as
+        lightweight {id, platform_id, url} records."""
+        sql = ("SELECT id, platform_id, url FROM listings WHERE platform='airbnb' "
+               "AND url IS NOT NULL AND (airbnb_location_radius_m IS NULL OR amenities IS NULL)")
         params: tuple = ()
         if limit is not None:
             sql += " LIMIT ?"
             params = (limit,)
-        rows = self.conn.execute(sql, params).fetchall()
-        return [{"id": r[0], "platform_id": r[1], "url": r[2]} for r in rows]
+        return [{"id": r[0], "platform_id": r[1], "url": r[2]}
+                for r in self.conn.execute(sql, params).fetchall()]
 
     def get_geocode(self, address_norm: str) -> dict | None:
         row = self.conn.execute(

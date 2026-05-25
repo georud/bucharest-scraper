@@ -16,7 +16,8 @@ def test_new_columns_present(db):
     cols = {r[1] for r in db.conn.execute("PRAGMA table_info(listings)")}
     for c in ("operator_id", "property_group_id", "latitude_geocoded",
               "latitude_best", "location_precision", "location_source",
-              "est_accuracy_m", "position_confidence", "geocoded_address"):
+              "est_accuracy_m", "position_confidence", "geocoded_address",
+              "amenities"):
         assert c in cols
 
 
@@ -133,11 +134,13 @@ def test_clear_failed_geocodes_keeps_ok(db):
 def test_airbnb_radius_capture_and_missing(db):
     _mk(db, "airbnb_r1", Platform.AIRBNB, "R1", 44.43, 26.10, url="https://www.airbnb.com/rooms/r1")
     _mk(db, "airbnb_r2", Platform.AIRBNB, "R2", 44.44, 26.11, url="https://www.airbnb.com/rooms/r2")
-    assert {m["id"] for m in db.get_airbnb_listings_missing_radius()} == {"airbnb_r1", "airbnb_r2"}
-    assert all(m["url"] for m in db.get_airbnb_listings_missing_radius())
+    # Both listings start with no radius and no amenities -> both need PDP details.
+    assert {m["id"] for m in db.get_airbnb_listings_missing_pdp_details()} == {"airbnb_r1", "airbnb_r2"}
+    assert all(m["url"] for m in db.get_airbnb_listings_missing_pdp_details())
+    # Setting radius on r1 keeps it in the queue (amenities still NULL).
     db.set_airbnb_location_radius({"airbnb_r1": 0.0})
-    assert {m["id"] for m in db.get_airbnb_listings_missing_radius()} == {"airbnb_r2"}
-    assert len(db.get_airbnb_listings_missing_radius(limit=1)) == 1
+    assert {m["id"] for m in db.get_airbnb_listings_missing_pdp_details()} == {"airbnb_r1", "airbnb_r2"}
+    assert len(db.get_airbnb_listings_missing_pdp_details(limit=1)) == 1
 
 
 def test_platform_precision_and_reset_keeps_radius(db):
@@ -151,3 +154,19 @@ def test_platform_precision_and_reset_keeps_radius(db):
         "SELECT platform_precision, airbnb_location_radius_m FROM listings WHERE id='booking_pp'").fetchone()
     assert row[0] is None    # platform_precision is curation-derived -> reset
     assert row[1] == 0.0     # radius is scraper data -> preserved
+
+
+def test_amenities_roundtrip_and_missing_pdp(db):
+    _mk(db, "airbnb_a1", Platform.AIRBNB, "A", 44.43, 26.10, url="https://www.airbnb.com/rooms/a1")
+    db.set_airbnb_location_radius({"airbnb_a1": 0.0})           # has radius, missing amenities
+    assert "airbnb_a1" in {r["id"] for r in db.get_airbnb_listings_missing_pdp_details()}
+    db.set_airbnb_amenities({"airbnb_a1": '["wifi","kitchen"]'})
+    assert db.conn.execute("SELECT amenities FROM listings WHERE id='airbnb_a1'").fetchone()[0] == '["wifi","kitchen"]'
+    assert "airbnb_a1" not in {r["id"] for r in db.get_airbnb_listings_missing_pdp_details()}  # now complete
+
+
+def test_curation_cols_include_maxguests_amenities(db):
+    _mk(db, "airbnb_a2", Platform.AIRBNB, "A", 44.43, 26.10, max_guests=8)
+    db.set_airbnb_amenities({"airbnb_a2": '["tv"]'})
+    row = next(r for r in db.get_listings_for_curation() if r["id"] == "airbnb_a2")
+    assert row["max_guests"] == 8 and row["amenities"] == '["tv"]'
