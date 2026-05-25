@@ -34,35 +34,49 @@ weakening cross-platform twin detection.
 
 ## Design
 
-### Part A — `max_guests` in the room-config match (free; fixes the reported case)
-- `room_config_matches(a, b)` (`src/dedup/property_groups.py`): add `max_guests`
-  to the compared fields. `None` stays a wildcard, so **cross-platform pairs are
-  unaffected** (Booking never reports `max_guests`). For same-platform pairs,
-  12 ≠ 14 → no room match → name sim (~45%) too low → the two separate.
+### The fix — a same-platform "distinctness veto" in `_compatible`
 
-### Part B — amenities capture + discriminator (the scrape)
-- **Capture** (`src/scrapers/airbnb/{parser,scraper}.py`): generalize the existing
-  radius pass into one PDP fetch that returns **both** `mapMarkerRadiusInMeters`
-  *and* the set of available amenity titles. New `parser.extract_amenities(html)`
-  → sorted list of normalized titles (lowercase, stripped) for `AmenityItem`s with
-  `available:true`. The scraper method (rename `capture_location_radius` →
-  `capture_pdp_details`) writes both via dedicated DB writers — **no `Listing`
-  dataclass churn** (same approach as radius).
-- **Storage** (`src/storage/database.py`): new `amenities` column (JSON-encoded
-  sorted title list; count = length). New `set_airbnb_amenities({id: json})`;
-  generalize `get_airbnb_listings_missing_radius` → `…_missing_pdp_details`
-  (radius IS NULL OR amenities IS NULL). Add `amenities` to `_CURATION_COLS`.
-- **Discriminator** (`src/dedup/property_groups.py`): `amenities_compatible(a, b)`
-  — for pairs where **both** have an amenity set, require Jaccard overlap of the
-  title sets ≥ a tuned threshold (start **0.6**, validate); if either lacks
-  amenities (e.g. any cross-platform pair — Booking has none), it's a **wildcard
-  (True)**. Fold it into the Tier-1 **room-only** path only:
+The over-merge spans **both** tiers — Tier-1's room-only path *and* Tier-2's pure
+`dist ≤ 100 m AND name ≥ 80` (no content check). A planning check confirmed it:
+`max_guests` placed only in `room_config_matches` would fix just ~100 of the 190
+differing-capacity groups; the other **~90 leak through Tier-2**. So the
+discriminator must sit where **both tiers and the clique-growth check** pass
+through — the top of `_compatible(a, b, …)` (`src/dedup/property_groups.py`).
+For **same-platform** pairs only, veto the match when the units are demonstrably
+different:
 
-  **same-platform Tier-1 rule →** `dist ≤ 250 AND (name ≥ 70 OR (room_match[+max_guests] AND amenities_compatible))`.
+```
+if a["platform"] == b["platform"]:        # cross-platform pairs skip the veto
+    if max_guests both present and differ:               -> return False
+    if amenities both present and jaccard(a, b) < 0.6:   -> return False
+# else fall through to the existing relaxed (Tier-1) / strict (Tier-2) logic
+```
 
-  So `name ≥ 70` genuine duplicates still merge; two identical-capacity units whose
-  amenity sets diverge no longer do. Cross-platform is unchanged (amenities +
-  max_guests both wildcard there).
+- **`max_guests` veto** — free (already stored); fixes the reported case + ~100 of
+  the 190 differing-capacity groups outright. A genuine duplicate shares capacity,
+  so it never splits a true dupe.
+- **amenities veto** — needed for the **~90** that leak via Tier-2 and the
+  identical-capacity cases `max_guests` can't separate: Jaccard of the normalized
+  available-amenity title sets, conservative threshold (start **0.6**, validate).
+  Wildcard when either side lacks amenities.
+
+Keyed on `platform` and run before the tier logic, the veto leaves **cross-platform
+twin detection untouched** (Booking has neither signal), and the `name ≥ 70` /
+`name ≥ 80` duplicate paths still merge genuine same-platform dupes (same flat →
+same capacity + ~same amenities).
+
+### Amenities capture (the scrape)
+- **Parser** (`src/scrapers/airbnb/parser.py`): `extract_amenities(html)` → sorted
+  list of normalized titles (lowercase, stripped) for `AmenityItem`s with
+  `available:true`.
+- **Scraper** (`src/scrapers/airbnb/scraper.py`): generalize the radius pass into
+  one PDP fetch returning **both** `mapMarkerRadiusInMeters` and the amenity titles
+  (rename `capture_location_radius` → `capture_pdp_details`); write via dedicated DB
+  writers — **no `Listing` dataclass churn** (same approach as radius).
+- **Storage** (`src/storage/database.py`): new `amenities` column (JSON list of
+  titles; count = length); `set_airbnb_amenities({id: json})`; generalize
+  `get_airbnb_listings_missing_radius` → `…_missing_pdp_details` (radius IS NULL OR
+  amenities IS NULL); add `amenities` to `_CURATION_COLS`.
 
 - **Curation** (`src/geo/curate.py`): pass `amenities` through to the property-group
   matcher (it's in `_CURATION_COLS`). **Exporter**: add `amenities` to the export.
@@ -70,8 +84,9 @@ weakening cross-platform twin detection.
 ## "Don't break the deduper" safeguards
 - Both new signals are **wildcards for cross-platform pairs** → the 1,495
   cross-platform groups and `recall_proxy = 1.0` are preserved by construction.
-- The amenity check only *tightens* the room-only merge path; the name-≥70 path
-  (genuine duplicates) is untouched.
+- The veto runs **before** the tier logic and is keyed on `platform`, so it gates
+  Tier-1 *and* Tier-2 for same-platform pairs while leaving genuine same-platform
+  duplicates (same capacity + ~same amenities) and cross-platform twins merging.
 - Conservative Jaccard threshold (0.6) + normalized titles to tolerate PDP/caption
   variance across captures.
 
@@ -81,10 +96,11 @@ weakening cross-platform twin detection.
    (multi-hour, monitored); re-curate; validate.
 
 ## Verification
-- Unit: `room_config_matches` rejects differing `max_guests`; `extract_amenities`
-  parses the `AmenityItem` fixture; `amenities_compatible` (Jaccard, wildcard when
-  absent); same-platform Tier-1 rule blocks differing-amenity units, keeps
-  name-≥70 dupes; cross-platform pair unaffected. Full suite green.
+- Unit: the same-platform veto in `_compatible` returns False for differing
+  `max_guests` and for low-Jaccard amenities, is a no-op for cross-platform pairs
+  and for missing signals, and fires in **both** a Tier-1 (relaxed) and a Tier-2
+  (strict, name ≥ 80) scenario; `extract_amenities` parses the `AmenityItem`
+  fixture; the Jaccard helper is correct. Full suite green.
 - E2E after re-curate: the reported pair has **different** `property_group_id`;
   cross-platform group count ≈ 1,495 (unchanged) and `recall_proxy = 1.0`;
   within-Airbnb over-merge groups drop; spot-check a sample of newly-split groups
