@@ -244,8 +244,8 @@ single biggest way to get a number wrong.
 - **Listing** — one row. The same flat can be listed more than once, on one
   platform or both.
 - **Property** — one physical place. The May 2026 capture has 10,982 listing
-  rows but an estimated **~8,036 distinct properties**, because many rows are the
-  same flat appearing twice (cross-platform or within a platform) — 2,094
+  rows but an estimated **~8,212 distinct properties**, because many rows are the
+  same flat appearing twice (cross-platform or within a platform) — 2,053
   property groups, see §7.
 - **Host** — the account doing the letting (`host_id`, `host_name` — Airbnb).
 - **Operator / trader** — the registered business behind a professional listing.
@@ -298,18 +298,29 @@ physical flat, within *or* across platforms, by three confidence tiers:
 3. **Tier 2 — spatial + name.** Outside operator blocks, pairs under 100 m with
    ≥80% name similarity.
 
+A **same-platform distinctness guard** sits above all tiers: two listings *on the
+same platform* are never grouped when both report a guest capacity (`max_guests`)
+and the values differ — a 12-guest and a 14-guest unit in one building are
+different properties, however close and similarly named. It never applies across
+platforms (Booking does not expose `max_guests`), so cross-platform twin detection
+is unchanged.
+
 Matching is greedy with a **clique check** (a listing joins a group only if
 compatible with *every* member), which structurally prevents one operator's
-shared phone from chaining its distant flats together. May 2026: 2,094 property
-groups (1,495 spanning both platforms), giving an
-estimated **~8,036 distinct properties** from 10,982 rows.
+shared phone from chaining its distant flats together. May 2026: 2,053 property
+groups (1,548 spanning both platforms), giving an
+estimated **~8,212 distinct properties** from 10,982 rows.
 
 **Treat the property count as an estimate, bracketed on both sides.** Airbnb's
 coordinate fuzz (§8) means a true twin can be missed; conversely Tier 1 can
 *over-merge* two genuinely different units of one operator if they sit within
-250 m with similar names. The earlier strict-1:1 method under-merged (~9,363
-distinct); this layered method merges more aggressively (~8,000). The truth lies
-between. **Verification:** for groups carrying identity keys on both sides, a
+250 m with similar names — the same-platform `max_guests` guard now separates the
+ones that *differ* in capacity (it removed ~190 such over-merges), though distinct
+units with the same capacity and layout can still merge (a finer amenity-based
+discriminator was prototyped but not deployed: full Airbnb amenity lists proved
+unreliable to capture at scale — the public page exposes only a ~10-item preview).
+The earlier strict-1:1 method under-merged (~9,363 distinct); this layered method
+merges more aggressively (~8,200). The truth lies between. **Verification:** for groups carrying identity keys on both sides, a
 recall proxy confirms **100% (66/66)** of identity-confirmed cross-platform twins
 were grouped; the precision proxy reads 0% only because the *same operator is
 often disclosed with different identity formats on each platform* (Booking gives
@@ -544,7 +555,7 @@ identity.
 - ✅ "Around **4,600 listings** in Bucharest across Booking and Airbnb are
   operated by parties the platforms classify as professional businesses." —
   classification has residual error (§13) and unclassified rows exist.
-- ✅ "Of the **~8,036 distinct properties** identified, a substantial share are
+- ✅ "Of the **~8,212 distinct properties** identified, a substantial share are
   run by professional operators rather than individual hosts." — "~" and
   "identified" are doing real work, and the estimate is method-dependent (§6, §7).
 - ✅ "One operator, STRE Asset Management, is attached to around 320 listings." —
@@ -598,7 +609,7 @@ rendered the signal — Airbnb anti-bot blocking, **not** a synonym for
 - **Price gaps** — ~35% of Booking listings have no price; genuinely unbookable on tested dates (§5, §10).
 - **Coordinates** — mixed as-scraped: Booking is street-or-better, ~49% of Airbnb expose an exact location (`mapMarkerRadiusInMeters=0`), the rest are ~150 m fuzz. Curation lifts **~78% to `exact`** (~21 m median) via geocoding + Airbnb's radius tag + cross-platform/temporal fusion; ~22% stay `approximate`. Map only `exact` rows; `platform_precision` says what the platform itself disclosed (§8).
 - **Some gaps are genuinely unrecoverable, not extraction misses** — re-fetching already-enriched listings yields ~nothing: Airbnb partial-room counts (~354 missing bathrooms) and host stats (`host_response_rate` ~657, `host_join_date` ~885) simply aren't on those pages; Booking `max_guests`/`business_vat` are never exposed. Don't re-scrape to chase them.
-- **Dedup is an estimate, bracketed both ways** — the layered method merges more aggressively than the old strict-1:1 (~8,000 vs ~9,363 distinct properties); Tier-1 can over-merge an operator's similar nearby units, Airbnb fuzz can miss twins (§7).
+- **Dedup is an estimate, bracketed both ways** — the layered method merges more aggressively than the old strict-1:1 (~8,200 vs ~9,363 distinct properties); Tier-1 can still over-merge an operator's similar *same-capacity* units (a same-platform `max_guests` guard separates those that differ), Airbnb fuzz can miss twins (§7).
 - **Business data is unverified** — not checked against ONRC/VIES (§9).
 - **Operator linking** — normalised via identity union-find, but the same operator can still split across platforms when Booking and Airbnb disclose different ID formats (CUI vs J-number) (§6).
 - **Airbnb `Unknown` (2)** — anti-bot blocking; recovered to near-zero by retry passes (1,771 → 301 → 2); not "individual" (§13).
