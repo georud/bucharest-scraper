@@ -38,6 +38,19 @@ def extract_map_radius(html: str | None) -> float | None:
     return float(m.group(1)) if m else None
 
 
+_AMENITY_RE = re.compile(r'"__typename":"AmenityItem","available":(true|false),"title":"([^"]{1,80})"')
+
+
+def extract_amenities(html: str | None) -> list[str]:
+    """Sorted, de-duplicated, normalized (lowercase/stripped) titles of the
+    AVAILABLE amenities on an Airbnb PDP. Returns [] if none/absent."""
+    if not html:
+        return []
+    titles = {t.strip().lower() for (avail, t) in _AMENITY_RE.findall(html)
+              if avail == "true" and t.strip()}
+    return sorted(titles)
+
+
 def parse_raw_api_results(
     raw_json: dict, grid_cell_id: str = "", stats: ParseStats | None = None
 ) -> list[Listing]:
