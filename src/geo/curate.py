@@ -63,6 +63,7 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
     observations: list[tuple] = []
     fuse_inputs: dict[str, list[Observation]] = defaultdict(list)
     geocoded_map: dict[str, tuple] = {}
+    scraped_sigma: dict[str, float] = {}
     plat_prec_map: dict[str, str] = {}  # platform's OWN exact/approximate per listing
     geocode_discarded = 0
 
@@ -74,6 +75,7 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
         gk = group_key(lid)
         _, sigma = classify_scraped_precision(
             r, stack[(round(r["latitude"], 6), round(r["longitude"], 6))], sigmas=fusion_cfg)
+        scraped_sigma[lid] = sigma
         cap_date = (r.get("scraped_at") or "")[:10]
         observations.append((lid, group_map.get(lid), cap_date, r["platform"],
                              "scraped", r["latitude"], r["longitude"], sigma))
@@ -140,6 +142,13 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
     for r in rows:
         members_by_key[group_key(r["id"])].append(r["id"])
 
+    from .calibration import compute_offsets, sigma_calibration, WARN_BAND
+    offset_writes, calib_pairs = compute_offsets(
+        cross_groups, members_by_key, by_id, geocoded_map, scraped_sigma)
+    db.set_cross_platform_offsets(offset_writes)
+    logger.info("Curation: %d cross-platform offsets written (%d geocoded calibration pairs)",
+                len(offset_writes), len(calib_pairs))
+
     fused_map: dict[str, dict] = {}
     exact_max = getattr(fusion_cfg, "exact_max_sigma_m", 40.0)
 
@@ -181,6 +190,18 @@ def run_curation(db, config=None, fetch_fn=None, backfill_rows=None) -> dict:
     # 5. Verification (exclude identity/operator-derived groups to avoid circularity)
     metrics = dedup_metrics(rows, group_map, identity_groups)
     metrics["geo_conflict_groups"] = geo_conflicts
+    calib = sigma_calibration(
+        calib_pairs,
+        geo_sigma=geo_sigma,
+        max_dist_m=disagreement_m,
+        warn_band=getattr(fusion_cfg, "calibration_warn_band", WARN_BAND),
+    )
+    metrics["position_calibration"] = calib
+    for b in calib["buckets"]:
+        if b["warned"]:
+            logger.warning(
+                "sigma calibration drift: sigma=%.0f n=%d measured_median=%.0fm predicted=%.0fm ratio=%.2f (band %s)",
+                b["airbnb_sigma"], b["n"], b["measured_median_m"], b["predicted_m"], b["ratio"], calib["warn_band"])
     logger.info("Curation metrics: %s", metrics)
     try:
         from ..storage.exporter import export_dedup_metrics, export_dedup_review
