@@ -460,7 +460,12 @@ RMS `√(σ² + σ_geocoded²)`. The **exact-pin bucket cross-checks the geocode
 So the Airbnb σ, originally a modelling assumption, is now empirically confirmed
 against geocoded twins; a bucket drifting outside the band logs a warning to
 recheck the ladder. The per-twin displacement is also exported per listing — see
-`cross_platform_offset_m` in §11.
+`cross_platform_offset_m` in §11. **Read thin buckets with care:** a small or
+right-skewed bucket (e.g. the ~21 wide-fuzz 500 m listings, whose offsets run
+14–791 m) can show a low *median* ratio (~0.3) yet be well-calibrated on an RMS
+basis (~0.8) — the median sits far below the RMS. So buckets with `n < 30` are
+reported but **never warned**, and a low ratio there is not by itself evidence of
+a mis-set σ.
 
 **How to use it:**
 - **Map / cite a point only where `location_precision = 'exact'`** (optionally
