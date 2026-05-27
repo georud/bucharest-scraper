@@ -141,6 +141,8 @@ class Database:
             ("airbnb_location_radius_m", "REAL"),
             ("platform_precision", "TEXT"),
             ("amenities", "TEXT"),
+            ("cross_platform_offset_m", "REAL"),
+            ("cross_platform_offset_source", "TEXT"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing:
@@ -797,7 +799,8 @@ class Database:
                  latitude_best=NULL, longitude_best=NULL, geocoded_address=NULL,
                  location_precision=NULL, location_source=NULL,
                  est_accuracy_m=NULL, position_confidence=NULL,
-                 platform_precision=NULL"""
+                 platform_precision=NULL,
+                 cross_platform_offset_m=NULL, cross_platform_offset_source=NULL"""
         )
         self.conn.commit()
 
@@ -899,6 +902,18 @@ class Database:
             return 0
         self.conn.executemany("UPDATE listings SET amenities=? WHERE id=?",
                               [(j, lid) for lid, j in mapping.items()])
+        self.conn.commit()
+        return len(mapping)
+
+    def set_cross_platform_offsets(self, mapping: dict[str, tuple[float, str]]) -> int:
+        """mapping: {listing_id: (offset_m, source)}. Cross-platform twin disagreement,
+        curation-derived; written to every member of a cross-platform group."""
+        if not mapping:
+            return 0
+        self.conn.executemany(
+            "UPDATE listings SET cross_platform_offset_m=?, cross_platform_offset_source=? WHERE id=?",
+            [(off, src, lid) for lid, (off, src) in mapping.items()],
+        )
         self.conn.commit()
         return len(mapping)
 

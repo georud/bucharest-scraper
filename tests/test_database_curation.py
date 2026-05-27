@@ -17,7 +17,7 @@ def test_new_columns_present(db):
     for c in ("operator_id", "property_group_id", "latitude_geocoded",
               "latitude_best", "location_precision", "location_source",
               "est_accuracy_m", "position_confidence", "geocoded_address",
-              "amenities"):
+              "amenities", "cross_platform_offset_m", "cross_platform_offset_source"):
         assert c in cols
 
 
@@ -170,3 +170,17 @@ def test_curation_cols_include_maxguests_amenities(db):
     db.set_airbnb_amenities({"airbnb_a2": '["tv"]'})
     row = next(r for r in db.get_listings_for_curation() if r["id"] == "airbnb_a2")
     assert row["max_guests"] == 8 and row["amenities"] == '["tv"]'
+
+
+def test_cross_platform_offset_roundtrip_and_reset(db):
+    _mk(db, "airbnb_off1", Platform.AIRBNB, "A", 44.43, 26.10)
+    db.set_cross_platform_offsets({"airbnb_off1": (123.4, "geocoded")})
+    row = db.conn.execute(
+        "SELECT cross_platform_offset_m, cross_platform_offset_source FROM listings WHERE id='airbnb_off1'"
+    ).fetchone()
+    assert row[0] == 123.4 and row[1] == "geocoded"
+    db.reset_curation_columns()
+    row = db.conn.execute(
+        "SELECT cross_platform_offset_m, cross_platform_offset_source FROM listings WHERE id='airbnb_off1'"
+    ).fetchone()
+    assert row[0] is None and row[1] is None       # curation-derived -> cleared
