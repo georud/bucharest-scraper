@@ -449,6 +449,19 @@ precision flag** (confirmed across the search payload and the detail page — un
 Airbnb's radius), so Booking coordinate precision is *inferred* from address detail
 + stacking rather than read from the platform.
 
+**The σ ladder is now corroborated each run.** Curation emits a
+`position_calibration` block in `dedup_metrics.json`: for cross-platform twins it
+measures the Airbnb-pin↔Booking-*geocoded* displacement, buckets it by the σ the
+ladder assigned the Airbnb point, and compares the measured median to the predicted
+RMS `√(σ² + σ_geocoded²)`. The **exact-pin bucket cross-checks the geocoder**
+(σ ≈ 25 m, measured ~26 m) and the **fuzz bucket the Airbnb obfuscation**
+(σ ≈ 106 m for the standard 152 m circle, measured ~99 m). Both land at
+`ratio ≈ 0.9` — the expected value for a median compared to an RMS, i.e. **in-band**.
+So the Airbnb σ, originally a modelling assumption, is now empirically confirmed
+against geocoded twins; a bucket drifting outside the band logs a warning to
+recheck the ladder. The per-twin displacement is also exported per listing — see
+`cross_platform_offset_m` in §11.
+
 **How to use it:**
 - **Map / cite a point only where `location_precision = 'exact'`** (optionally
   filter `position_confidence ≥ 0.7`). For `approximate` rows, fall back to
@@ -531,6 +544,8 @@ identity.
 | `operator_id` | Operator id — normalised identity union-find (§6, §7) | not a trader / no identity key |
 | `property_group_id` | Same physical flat, within or across platforms (§7) | not matched to another listing |
 | `cross_platform_group_id` | The subset of property groups that span both platforms (§7) | no cross-platform match |
+| `cross_platform_offset_m` | Distance (m) between the Airbnb pin and the Booking geocoded address for a twinned property (median over pairs); on every member of a cross-platform group (§8) | not a cross-platform twin |
+| `cross_platform_offset_source` | Which Booking anchor the offset used: `geocoded` (street address) or `scraped` (map coordinate) | not a cross-platform twin |
 | `latitude_best`, `longitude_best` | **Fused best position — use these for mapping** (§8) | no coordinate at all |
 | `latitude_geocoded`, `longitude_geocoded` | Geocoded Booking street address (§8) | not geocoded / not Booking |
 | `geocoded_address` | The cleaned address string that was geocoded (street + number, city) | not geocoded |
