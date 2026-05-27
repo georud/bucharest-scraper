@@ -1,5 +1,5 @@
 import math
-from src.geo.calibration import sigma_calibration, WARN_BAND
+from src.geo.calibration import sigma_calibration, compute_offsets, WARN_BAND
 
 
 def _pairs(sigma, dists):
@@ -43,3 +43,53 @@ def test_default_warn_band_applied_and_listified():
     out = sigma_calibration(_pairs(100.0, [100]), geo_sigma=25.0, max_dist_m=1000.0)
     assert WARN_BAND == (0.6, 1.4)
     assert out["warn_band"] == list(WARN_BAND)
+
+
+def _row(lid, platform, lat, lng):
+    return {"id": lid, "platform": platform, "latitude": lat, "longitude": lng}
+
+
+def test_compute_offsets_geocoded_pair():
+    by_id = {"ab": _row("ab", "airbnb", 44.4300, 26.1000),
+             "bk": _row("bk", "booking", 44.4300, 26.1000)}
+    members_by_key = {"g1": ["ab", "bk"]}
+    geocoded_map = {"bk": (44.4309, 26.1000, "addr")}   # ~100 m north of the pin
+    scraped_sigma = {"ab": 106.4, "bk": 50.0}
+    offsets, calib = compute_offsets({"g1"}, members_by_key, by_id, geocoded_map, scraped_sigma)
+    # both members carry the same offset; source is geocoded
+    assert offsets["ab"][1] == "geocoded" and offsets["bk"][1] == "geocoded"
+    assert 95 <= offsets["ab"][0] <= 105 and offsets["ab"][0] == offsets["bk"][0]
+    # calibration pair carries the Airbnb point's sigma + the geocoded distance
+    assert len(calib) == 1 and calib[0]["airbnb_sigma"] == 106.4
+    assert abs(calib[0]["distance_m"] - offsets["ab"][0]) < 1.0
+
+
+def test_compute_offsets_scraped_fallback_and_no_calib():
+    by_id = {"ab": _row("ab", "airbnb", 44.4300, 26.1000),
+             "bk": _row("bk", "booking", 44.4305, 26.1000)}
+    members_by_key = {"g1": ["ab", "bk"]}
+    offsets, calib = compute_offsets({"g1"}, members_by_key, by_id, {}, {"ab": 15.0})
+    assert offsets["ab"][1] == "scraped"
+    assert calib == []                                  # no geocoded pair -> no calibration input
+
+
+def test_compute_offsets_skips_single_platform_group():
+    by_id = {"ab": _row("ab", "airbnb", 44.43, 26.10), "ab2": _row("ab2", "airbnb", 44.43, 26.10)}
+    offsets, calib = compute_offsets({"g1"}, {"g1": ["ab", "ab2"]}, by_id, {}, {"ab": 15.0, "ab2": 15.0})
+    assert offsets == {} and calib == []
+
+
+def test_compute_offsets_multi_member_group():
+    by_id = {"ab1": _row("ab1", "airbnb", 44.4300, 26.1000),
+             "ab2": _row("ab2", "airbnb", 44.4310, 26.1000),   # ~111 m from the booking
+             "bk": _row("bk", "booking", 44.4300, 26.1000)}
+    members_by_key = {"g1": ["ab1", "ab2", "bk"]}
+    geocoded_map = {"bk": (44.4300, 26.1000, "addr")}
+    scraped_sigma = {"ab1": 15.0, "ab2": 106.4, "bk": 50.0}
+    offsets, calib = compute_offsets({"g1"}, members_by_key, by_id, geocoded_map, scraped_sigma)
+    # all three members carry the same group offset = median of the 2 pair distances (~0 and ~111 m)
+    assert offsets["ab1"][0] == offsets["ab2"][0] == offsets["bk"][0]
+    assert 50 <= offsets["ab1"][0] <= 62
+    # one calibration pair per (airbnb, booking) pair, each with its own airbnb sigma
+    assert len(calib) == 2
+    assert {p["airbnb_sigma"] for p in calib} == {15.0, 106.4}
